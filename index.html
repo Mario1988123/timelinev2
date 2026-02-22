@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no, maximum-scale=1">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#000000">
+  <title>Magic Clock</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="assets/icon-192.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="assets/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@100;200;300;400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Background -->
+  <div id="bg-layer"></div>
+
+  <!-- Lockscreen UI -->
+  <div id="lockscreen">
+    <div id="lock-top">
+      <div id="lock-icon">
+        <svg width="12" height="15" viewBox="0 0 16 20" fill="none">
+          <rect x="1" y="9" width="14" height="10" rx="2" stroke="white" stroke-width="1.5" fill="none"/>
+          <path d="M4 9V6a4 4 0 018 0v3" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        </svg>
+      </div>
+    </div>
+    <div id="clock-area">
+      <div id="time-display">
+        <span id="hours">00</span><span id="colon">:</span><span id="minutes">00</span>
+      </div>
+      <div id="date-display"></div>
+    </div>
+    <div id="lock-bottom">
+      <div id="bottom-bar"></div>
+    </div>
+  </div>
+
+  <!-- BLACKOUT: covers everything while magician sets offset -->
+  <div id="blackout"></div>
+
+  <!-- FULL-SCREEN secret keypad -->
+  <div id="keypad-overlay">
+    <div class="kp-row">
+      <div class="kp-btn" data-key="1">1</div>
+      <div class="kp-btn" data-key="2">2</div>
+      <div class="kp-btn" data-key="3">3</div>
+    </div>
+    <div class="kp-row">
+      <div class="kp-btn" data-key="4">4</div>
+      <div class="kp-btn" data-key="5">5</div>
+      <div class="kp-btn" data-key="6">6</div>
+    </div>
+    <div class="kp-row">
+      <div class="kp-btn" data-key="7">7</div>
+      <div class="kp-btn" data-key="8">8</div>
+      <div class="kp-btn" data-key="9">9</div>
+    </div>
+    <div class="kp-row">
+      <div class="kp-btn kp-sign" data-key="+">+</div>
+      <div class="kp-btn" data-key="0">0</div>
+      <div class="kp-btn kp-sign" data-key="-">&minus;</div>
+    </div>
+  </div>
+
+  <!-- Secret config menu -->
+  <div id="secret-menu" class="hidden">
+    <div id="menu-panel">
+      <h2>Configuraci&oacute;n</h2>
+
+      <label>Estilo</label>
+      <div class="btn-group" id="style-group">
+        <button data-val="ios" class="active">iOS</button>
+        <button data-val="android">Android</button>
+      </div>
+
+      <label>Fondo de pantalla</label>
+      <div class="btn-group" id="bg-group">
+        <button data-val="gradient" class="active">Degradado</button>
+        <button data-val="wall1">Oc&eacute;ano</button>
+        <button data-val="wall2">Atardecer</button>
+        <button data-val="wall3">Esmeralda</button>
+      </div>
+      <button id="btn-custom-bg">Subir foto de galer&iacute;a</button>
+      <input type="file" id="file-bg" accept="image/*" style="display:none">
+      <div id="custom-bg-preview" class="hidden">
+        <span>Fondo personalizado activo</span>
+        <button id="btn-remove-custom-bg">Quitar</button>
+      </div>
+
+      <label>Modo de retorno</label>
+      <div class="btn-group" id="return-group">
+        <button data-val="shake" class="active">Agitar</button>
+        <button data-val="tap">Tap</button>
+      </div>
+
+      <label>Inicio del retorno</label>
+      <div class="btn-group" id="delay-group">
+        <button data-val="0">Inmediato</button>
+        <button data-val="3" class="active">3s delay</button>
+        <button data-val="5">5s delay</button>
+        <button data-val="tap">Tap manual</button>
+      </div>
+
+      <label>Velocidad de retorno (seg)</label>
+      <input type="range" id="return-speed" min="5" max="120" value="30" step="5">
+      <span id="return-speed-val">30s</span>
+
+      <label>Sensibilidad shake</label>
+      <input type="range" id="shake-sens" min="5" max="40" value="15" step="1">
+      <span id="shake-sens-val">15</span>
+
+      <div id="motion-permission" class="hidden">
+        <button id="btn-motion-perm">Activar sensor de movimiento (iOS)</button>
+      </div>
+
+      <button id="btn-calibrate">Calibrar hora real</button>
+
+      <label class="toggle-label">
+        <input type="checkbox" id="debug-toggle"> Mostrar debug
+      </label>
+
+      <div id="debug-log" class="hidden"></div>
+
+      <button id="btn-close-menu">Cerrar</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

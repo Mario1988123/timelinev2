@@ -1,0 +1,447 @@
+name: Deploy & Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  deploy-pages:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  build-apk:
+    runs-on: ubuntu-latest
+    needs: deploy-pages
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Create Android project
+        run: |
+          mkdir -p android-build/app/src/main/java/com/magicclock/app
+          mkdir -p android-build/app/src/main/res/values
+          mkdir -p android-build/app/src/main/res/mipmap-hdpi
+          mkdir -p android-build/app/src/main/res/mipmap-xhdpi
+          mkdir -p android-build/app/src/main/res/mipmap-xxhdpi
+          mkdir -p android-build/app/src/main/res/mipmap-xxxhdpi
+          mkdir -p android-build/gradle/wrapper
+          
+          # Copy icons
+          cp assets/icon-192.png android-build/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          cp assets/icon-192.png android-build/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          cp assets/icon-512.png android-build/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          cp assets/icon-512.png android-build/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+
+      - name: Write Gradle files
+        run: |
+          cd android-build
+
+          # gradle-wrapper.properties
+          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+
+          # settings.gradle
+          cat > settings.gradle << 'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "MagicClock"
+          include ':app'
+          EOF
+
+          # Root build.gradle
+          cat > build.gradle << 'EOF'
+          plugins {
+              id 'com.android.application' version '8.2.0' apply false
+          }
+          EOF
+
+          # App build.gradle
+          cat > app/build.gradle << 'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.magicclock.app'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.magicclock.app"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0.0"
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.webkit:webkit:1.9.0'
+          }
+          EOF
+
+      - name: Write AndroidManifest.xml
+        run: |
+          cat > android-build/app/src/main/AndroidManifest.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+              <uses-permission android:name="android.permission.VIBRATE" />
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="MagicClock"
+                  android:usesCleartextTraffic="false"
+                  android:theme="@style/AppTheme">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboard|keyboardHidden"
+                      android:screenOrientation="portrait"
+                      android:theme="@style/AppTheme">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+      - name: Write styles.xml
+        run: |
+          cat > android-build/app/src/main/res/values/styles.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="android:Theme.DeviceDefault.NoActionBar">
+                  <item name="android:windowFullscreen">true</item>
+                  <item name="android:windowNoTitle">true</item>
+                  <item name="android:windowBackground">#FF000000</item>
+                  <item name="android:statusBarColor">#00000000</item>
+                  <item name="android:navigationBarColor">#FF000000</item>
+                  <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+                  <item name="android:windowTranslucentStatus">true</item>
+                  <item name="android:windowTranslucentNavigation">true</item>
+              </style>
+          </resources>
+          EOF
+
+      - name: Write MainActivity.java
+        run: |
+          cat > android-build/app/src/main/java/com/magicclock/app/MainActivity.java << 'JAVA'
+          package com.magicclock.app;
+
+          import android.app.Activity;
+          import android.graphics.Color;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.view.View;
+          import android.view.Window;
+          import android.view.WindowManager;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient.FileChooserParams;
+          import android.content.Intent;
+          import android.net.Uri;
+
+          public class MainActivity extends Activity {
+              private WebView webView;
+              private ValueCallback<Uri[]> fileUploadCallback;
+              private static final int FILE_CHOOSER_REQUEST = 100;
+              private static final String PWA_URL = "https://mario1988123.github.io/timelinev2/";
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  // Fullscreen immersive
+                  requestWindowFeature(Window.FEATURE_NO_TITLE);
+                  getWindow().setFlags(
+                      WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                      WindowManager.LayoutParams.FLAG_FULLSCREEN
+                  );
+                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                      getWindow().getAttributes().layoutInDisplayCutoutMode =
+                          WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                  }
+
+                  // Create WebView
+                  webView = new WebView(this);
+                  webView.setBackgroundColor(Color.BLACK);
+                  setContentView(webView);
+
+                  // Immersive sticky mode
+                  setImmersive();
+
+                  // WebView settings
+                  WebSettings settings = webView.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+                  settings.setDatabaseEnabled(true);
+                  settings.setAllowFileAccess(true);
+                  settings.setMediaPlaybackRequiresUserGesture(false);
+                  settings.setUseWideViewPort(true);
+                  settings.setLoadWithOverviewMode(true);
+
+                  // Handle navigation inside WebView
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                          String url = request.getUrl().toString();
+                          if (url.contains("mario1988123.github.io")) {
+                              return false;
+                          }
+                          return false;
+                      }
+                  });
+
+                  // Handle file uploads (for custom wallpaper)
+                  webView.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public boolean onShowFileChooser(WebView webView,
+                              ValueCallback<Uri[]> callback,
+                              FileChooserParams params) {
+                          if (fileUploadCallback != null) {
+                              fileUploadCallback.onReceiveValue(null);
+                          }
+                          fileUploadCallback = callback;
+                          Intent intent = params.createIntent();
+                          try {
+                              startActivityForResult(intent, FILE_CHOOSER_REQUEST);
+                          } catch (Exception e) {
+                              fileUploadCallback = null;
+                              return false;
+                          }
+                          return true;
+                      }
+                  });
+
+                  // Load PWA
+                  webView.loadUrl(PWA_URL);
+              }
+
+              private void setImmersive() {
+                  getWindow().getDecorView().setSystemUiVisibility(
+                      View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                      | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                      | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                      | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                      | View.SYSTEM_UI_FLAG_FULLSCREEN
+                      | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                  );
+              }
+
+              @Override
+              public void onWindowFocusChanged(boolean hasFocus) {
+                  super.onWindowFocusChanged(hasFocus);
+                  if (hasFocus) setImmersive();
+              }
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+                  if (requestCode == FILE_CHOOSER_REQUEST) {
+                      if (fileUploadCallback != null) {
+                          Uri[] results = null;
+                          if (resultCode == RESULT_OK && data != null) {
+                              String dataString = data.getDataString();
+                              if (dataString != null) {
+                                  results = new Uri[]{Uri.parse(dataString)};
+                              }
+                          }
+                          fileUploadCallback.onReceiveValue(results);
+                          fileUploadCallback = null;
+                      }
+                  }
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (webView.canGoBack()) {
+                      webView.goBack();
+                  }
+                  // Don't call super — prevent exiting on back press
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  setImmersive();
+              }
+          }
+          JAVA
+
+      - name: Generate signing key
+        run: |
+          keytool -genkeypair \
+            -alias magic-clock \
+            -keyalg RSA -keysize 2048 \
+            -validity 10000 \
+            -keystore android-build/keystore.jks \
+            -storepass android123 \
+            -keypass android123 \
+            -dname "CN=MagicClock, OU=App, O=MagicClock, L=Madrid, ST=Madrid, C=ES"
+
+      - name: Add signing config to build.gradle
+        run: |
+          cat > android-build/app/build.gradle << 'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.magicclock.app'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.magicclock.app"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0.0"
+              }
+
+              signingConfigs {
+                  release {
+                      storeFile file("../keystore.jks")
+                      storePassword "android123"
+                      keyAlias "magic-clock"
+                      keyPassword "android123"
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                      minifyEnabled false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.webkit:webkit:1.9.0'
+          }
+          EOF
+
+      - name: Build APK
+        run: |
+          cd android-build
+          
+          # Download Gradle wrapper
+          curl -sL "https://raw.githubusercontent.com/nicolo-nicolo/nicolo-nicolo/main/gradle/wrapper/gradle-wrapper.jar" -o gradle/wrapper/gradle-wrapper.jar 2>/dev/null || true
+          
+          # Use gradle init to get wrapper
+          gradle wrapper --gradle-version 8.4 2>/dev/null || true
+          
+          # If no gradlew, download manually
+          if [ ! -f gradlew ]; then
+            curl -sL "https://services.gradle.org/distributions/gradle-8.4-bin.zip" -o /tmp/gradle.zip
+            unzip -q /tmp/gradle.zip -d /tmp/
+            /tmp/gradle-8.4/bin/gradle wrapper --gradle-version 8.4
+          fi
+          
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Collect APK
+        run: |
+          APK=$(find android-build -name "*.apk" -path "*/release/*" | head -1)
+          if [ -n "$APK" ]; then
+            cp "$APK" MagicClock.apk
+            echo "APK_FOUND=true" >> $GITHUB_ENV
+            echo "✅ APK built: $APK"
+            ls -lh MagicClock.apk
+          else
+            echo "APK_FOUND=false" >> $GITHUB_ENV
+            echo "❌ No APK found"
+            find android-build -name "*.apk" -type f || true
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MagicClock-APK
+          path: MagicClock.apk
+          if-no-files-found: warn
+
+      - name: Create GitHub Release
+        if: env.APK_FOUND == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v1.0.0
+          name: Magic Clock v1.0.0
+          body: |
+            🎩 Magic Clock APK
+            
+            Instala el APK en tu Android.
+            Pantalla completa, sin barras, modo inmersivo.
+          files: MagicClock.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
