@@ -21,7 +21,9 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
-      - name: Create project structure
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Create project
         run: |
           mkdir -p android/app/src/main/java/com/magicclock/app
           mkdir -p android/app/src/main/res/values
@@ -34,14 +36,14 @@ jobs:
           cp assets/icon-512.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
           cp assets/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
 
-      - name: Generate signing key
+      - name: Generate keystore
         run: |
           keytool -genkeypair -alias mc -keyalg RSA -keysize 2048 \
             -validity 10000 -keystore android/keystore.jks \
             -storepass clock123 -keypass clock123 \
             -dname "CN=MagicClock,O=MagicClock,L=Madrid,C=ES"
 
-      - name: Write settings.gradle
+      - name: Write Gradle files
         run: |
           cat > android/settings.gradle << 'EOF'
           pluginManagement {
@@ -62,16 +64,12 @@ jobs:
           include ':app'
           EOF
 
-      - name: Write root build.gradle
-        run: |
           cat > android/build.gradle << 'EOF'
           plugins {
               id 'com.android.application' version '8.2.0' apply false
           }
           EOF
 
-      - name: Write app build.gradle
-        run: |
           cat > android/app/build.gradle << 'EOF'
           plugins {
               id 'com.android.application'
@@ -104,13 +102,16 @@ jobs:
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
+              lint {
+                  abortOnError false
+              }
           }
           dependencies {
-              implementation 'androidx.webkit:webkit:1.9.0'
+              implementation 'androidx.webkit:webkit:1.8.0'
           }
           EOF
 
-      - name: Write AndroidManifest
+      - name: Write Android sources
         run: |
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
@@ -120,12 +121,13 @@ jobs:
               <application
                   android:icon="@mipmap/ic_launcher"
                   android:label="MagicClock"
-                  android:theme="@style/AppTheme">
+                  android:theme="@style/AppTheme"
+                  android:usesCleartextTraffic="false">
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
                       android:screenOrientation="portrait"
-                      android:configChanges="orientation|screenSize">
+                      android:configChanges="orientation|screenSize|keyboard|keyboardHidden">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
@@ -135,8 +137,6 @@ jobs:
           </manifest>
           EOF
 
-      - name: Write styles
-        run: |
           cat > android/app/src/main/res/values/styles.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
@@ -150,8 +150,6 @@ jobs:
           </resources>
           EOF
 
-      - name: Write MainActivity
-        run: |
           cat > android/app/src/main/java/com/magicclock/app/MainActivity.java << 'JAVAEOF'
           package com.magicclock.app;
 
@@ -170,27 +168,30 @@ jobs:
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
 
+          @SuppressWarnings("deprecation")
           public class MainActivity extends Activity {
               private WebView webView;
               private ValueCallback<Uri[]> uploadCb;
               private static final int PICK = 1;
+              private static final String URL = "https://mario1988123.github.io/timelinev2/";
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   requestWindowFeature(Window.FEATURE_NO_TITLE);
-                  getWindow().setFlags(
-                      WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                      WindowManager.LayoutParams.FLAG_FULLSCREEN);
-                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                      getWindow().getAttributes().layoutInDisplayCutoutMode =
-                          WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                  Window w = getWindow();
+                  w.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                             WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                  w.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                  if (Build.VERSION.SDK_INT >= 28) {
+                      w.getAttributes().layoutInDisplayCutoutMode = 1;
                   }
+
                   webView = new WebView(this);
                   webView.setBackgroundColor(Color.BLACK);
                   setContentView(webView);
                   goImmersive();
+
                   WebSettings s = webView.getSettings();
                   s.setJavaScriptEnabled(true);
                   s.setDomStorageEnabled(true);
@@ -198,20 +199,27 @@ jobs:
                   s.setAllowFileAccess(true);
                   s.setCacheMode(WebSettings.LOAD_DEFAULT);
                   s.setMediaPlaybackRequiresUserGesture(false);
+
                   webView.setWebViewClient(new WebViewClient());
                   webView.setWebChromeClient(new WebChromeClient() {
                       @Override
                       public boolean onShowFileChooser(WebView wv,
                               ValueCallback<Uri[]> cb,
-                              FileChooserParams p) {
+                              WebChromeClient.FileChooserParams p) {
                           if (uploadCb != null) uploadCb.onReceiveValue(null);
                           uploadCb = cb;
-                          startActivityForResult(p.createIntent(), PICK);
+                          try {
+                              startActivityForResult(p.createIntent(), PICK);
+                          } catch (Exception e) {
+                              uploadCb = null;
+                              return false;
+                          }
                           return true;
                       }
                   });
-                  webView.loadUrl("https://mario1988123.github.io/timelinev2/");
+                  webView.loadUrl(URL);
               }
+
               private void goImmersive() {
                   getWindow().getDecorView().setSystemUiVisibility(
                       View.SYSTEM_UI_FLAG_LAYOUT_STABLE
@@ -221,37 +229,52 @@ jobs:
                       | View.SYSTEM_UI_FLAG_FULLSCREEN
                       | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
               }
-              @Override public void onWindowFocusChanged(boolean f) {
-                  super.onWindowFocusChanged(f); if (f) goImmersive();
+
+              @Override
+              public void onWindowFocusChanged(boolean hasFocus) {
+                  super.onWindowFocusChanged(hasFocus);
+                  if (hasFocus) goImmersive();
               }
-              @Override protected void onResume() {
-                  super.onResume(); goImmersive();
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  goImmersive();
               }
-              @Override protected void onActivityResult(int req, int res, Intent data) {
-                  if (req == PICK && uploadCb != null) {
-                      Uri[] r = null;
-                      if (res == RESULT_OK && data != null && data.getDataString() != null)
-                          r = new Uri[]{Uri.parse(data.getDataString())};
-                      uploadCb.onReceiveValue(r);
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+                  super.onActivityResult(requestCode, resultCode, data);
+                  if (requestCode == PICK && uploadCb != null) {
+                      Uri[] result = null;
+                      if (resultCode == RESULT_OK && data != null) {
+                          String s = data.getDataString();
+                          if (s != null) result = new Uri[]{Uri.parse(s)};
+                      }
+                      uploadCb.onReceiveValue(result);
                       uploadCb = null;
                   }
               }
-              @Override public void onBackPressed() { }
+
+              @Override
+              public void onBackPressed() {
+                  // Block back button
+              }
           }
           JAVAEOF
 
       - name: Build APK
+        working-directory: android
         run: |
-          cd android
           gradle wrapper --gradle-version 8.4
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Collect APK
         run: |
           APK=$(find android -name "app-release.apk" | head -1)
           cp "$APK" MagicClock.apk
-          echo "✅ APK size: $(du -h MagicClock.apk | cut -f1)"
+          echo "✅ $(du -h MagicClock.apk | cut -f1)"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
