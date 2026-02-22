@@ -63,6 +63,12 @@ jobs:
           include ':app'
           SETTINGSEOF
 
+          # --- gradle.properties ---
+          cat > android/gradle.properties << 'PROPSEOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2048m
+          PROPSEOF
+
           # --- root build.gradle ---
           cat > android/build.gradle << 'ROOTEOF'
           plugins {
