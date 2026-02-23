@@ -19,243 +19,41 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v3
 
-      - name: Accept licenses and install build tools
-        run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "build-tools;34.0.0" "platforms;android-34" || true
+      - name: Accept licenses
+        run: yes | sdkmanager --licenses || true
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Create full Android project
+      - name: Generate keystore
         run: |
-          mkdir -p android/app/src/main/java/com/magicclock/app
-          mkdir -p android/app/src/main/res/values
-          mkdir -p android/app/src/main/res/mipmap-hdpi
-          mkdir -p android/app/src/main/res/mipmap-xxxhdpi
-          cp assets/icon-192.png android/app/src/main/res/mipmap-hdpi/ic_launcher.png
-          cp assets/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-
           keytool -genkeypair -alias mc -keyalg RSA -keysize 2048 \
-            -validity 10000 -keystore android/keystore.jks \
+            -validity 10000 -keystore android-project/keystore.jks \
             -storepass clock123 -keypass clock123 \
             -dname "CN=MagicClock,O=MC,L=Madrid,C=ES"
 
-          # --- settings.gradle ---
-          cat > android/settings.gradle << 'SETTINGSEOF'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          rootProject.name = "MagicClock"
-          include ':app'
-          SETTINGSEOF
-
-          # --- gradle.properties ---
-          cat > android/gradle.properties << 'PROPSEOF'
-          android.useAndroidX=true
-          org.gradle.jvmargs=-Xmx2048m
-          PROPSEOF
-
-          # --- root build.gradle ---
-          cat > android/build.gradle << 'ROOTEOF'
-          plugins {
-              id 'com.android.application' version '8.2.0' apply false
-          }
-          ROOTEOF
-
-          # --- app/build.gradle ---
-          cat > android/app/build.gradle << 'APPEOF'
-          plugins {
-              id 'com.android.application'
-          }
-          android {
-              namespace 'com.magicclock.app'
-              compileSdk 34
-              defaultConfig {
-                  applicationId "com.magicclock.app"
-                  minSdk 24
-                  targetSdk 34
-                  versionCode 1
-                  versionName "1.0.0"
-              }
-              signingConfigs {
-                  release {
-                      storeFile file("../keystore.jks")
-                      storePassword "clock123"
-                      keyAlias "mc"
-                      keyPassword "clock123"
-                  }
-              }
-              buildTypes {
-                  release {
-                      signingConfig signingConfigs.release
-                      minifyEnabled false
-                  }
-              }
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-              lint {
-                  abortOnError false
-                  checkReleaseBuilds false
-              }
-          }
-          APPEOF
-
-          # --- AndroidManifest.xml ---
-          cat > android/app/src/main/AndroidManifest.xml << 'MANIFESTEOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.INTERNET"/>
-              <uses-permission android:name="android.permission.WAKE_LOCK"/>
-              <application
-                  android:icon="@mipmap/ic_launcher"
-                  android:label="MagicClock"
-                  android:theme="@style/Theme"
-                  android:usesCleartextTraffic="false">
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:screenOrientation="portrait">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          MANIFESTEOF
-
-          # --- styles.xml ---
-          cat > android/app/src/main/res/values/styles.xml << 'STYLEEOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <style name="Theme" parent="android:Theme.DeviceDefault.NoActionBar">
-                  <item name="android:windowFullscreen">true</item>
-                  <item name="android:windowNoTitle">true</item>
-                  <item name="android:windowBackground">#FF000000</item>
-              </style>
-          </resources>
-          STYLEEOF
-
-          # --- MainActivity.java ---
-          cat > android/app/src/main/java/com/magicclock/app/MainActivity.java << 'JAVAEOF'
-          package com.magicclock.app;
-
-          import android.app.Activity;
-          import android.content.Intent;
-          import android.graphics.Color;
-          import android.net.Uri;
-          import android.os.Bundle;
-          import android.view.View;
-          import android.view.Window;
-          import android.view.WindowManager;
-          import android.webkit.ValueCallback;
-          import android.webkit.WebChromeClient;
-          import android.webkit.WebSettings;
-          import android.webkit.WebView;
-          import android.webkit.WebViewClient;
-
-          public class MainActivity extends Activity {
-              private WebView webView;
-              private ValueCallback<Uri[]> uploadCb;
-
-              @Override
-              protected void onCreate(Bundle b) {
-                  super.onCreate(b);
-                  requestWindowFeature(Window.FEATURE_NO_TITLE);
-                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN
-                      | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-                  webView = new WebView(this);
-                  webView.setBackgroundColor(Color.BLACK);
-                  setContentView(webView);
-                  hideUI();
-                  WebSettings s = webView.getSettings();
-                  s.setJavaScriptEnabled(true);
-                  s.setDomStorageEnabled(true);
-                  s.setAllowFileAccess(true);
-                  webView.setWebViewClient(new WebViewClient());
-                  webView.setWebChromeClient(new WebChromeClient() {
-                      @Override
-                      public boolean onShowFileChooser(
-                              WebView w, ValueCallback<Uri[]> cb,
-                              FileChooserParams p) {
-                          if (uploadCb != null) uploadCb.onReceiveValue(null);
-                          uploadCb = cb;
-                          try { startActivityForResult(p.createIntent(), 1); }
-                          catch (Exception e) { uploadCb = null; return false; }
-                          return true;
-                      }
-                  });
-                  webView.loadUrl("https://mario1988123.github.io/timelinev2/");
-              }
-
-              private void hideUI() {
-                  getWindow().getDecorView().setSystemUiVisibility(
-                      View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                      | View.SYSTEM_UI_FLAG_FULLSCREEN
-                      | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                      | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                      | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                      | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
-              }
-
-              @Override public void onWindowFocusChanged(boolean f) {
-                  super.onWindowFocusChanged(f);
-                  if (f) hideUI();
-              }
-
-              @Override protected void onResume() {
-                  super.onResume();
-                  hideUI();
-              }
-
-              @Override
-              protected void onActivityResult(int req, int res, Intent d) {
-                  super.onActivityResult(req, res, d);
-                  if (req == 1 && uploadCb != null) {
-                      Uri[] r = null;
-                      if (res == RESULT_OK && d != null && d.getDataString() != null)
-                          r = new Uri[]{ Uri.parse(d.getDataString()) };
-                      uploadCb.onReceiveValue(r);
-                      uploadCb = null;
-                  }
-              }
-          }
-          JAVAEOF
+      - name: Verify files
+        run: |
+          echo "=== gradle.properties ==="
+          cat android-project/gradle.properties
+          echo "=== app/build.gradle ==="
+          cat android-project/app/build.gradle
+          echo "=== OK ==="
 
       - name: Build APK
-        working-directory: android
+        working-directory: android-project
         run: |
           gradle wrapper --gradle-version 8.2
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --info 2>&1 | tail -80
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Collect APK
         run: |
-          echo "=== Looking for APK ==="
-          find android -name "*.apk" -type f
-          APK=$(find android -name "app-release.apk" | head -1)
-          if [ -z "$APK" ]; then
-            echo "❌ No APK found"
-            exit 1
-          fi
+          find android-project -name "*.apk" -type f
+          APK=$(find android-project -name "app-release.apk" | head -1)
           cp "$APK" MagicClock.apk
-          echo "✅ $(du -h MagicClock.apk | cut -f1)"
+          ls -lh MagicClock.apk
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
