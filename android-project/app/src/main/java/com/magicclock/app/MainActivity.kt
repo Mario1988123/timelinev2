@@ -1,15 +1,10 @@
 package com.magicclock.app
 
 import android.app.Activity
-import android.app.AlertDialog
+import android.app.Dialog
 import android.content.Context
 import android.content.SharedPreferences
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.LinearGradient
-import android.graphics.Paint
-import android.graphics.Shader
-import android.graphics.Typeface
+import android.graphics.*
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -19,10 +14,12 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.Window
 import android.view.WindowManager
+import android.widget.*
 import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
@@ -31,20 +28,28 @@ import kotlin.math.pow
 
 class MainActivity : Activity(), SensorEventListener {
 
-    // ── State ──
+    // ══════════════ APP STATES ══════════════
+    // Phase 1: BOOT   → black screen, keypad flashes briefly
+    // Phase 2: DARK   → black screen, mago taps +/- and digit (invisible)
+    // Phase 3: LIVE   → clock visible with wallpaper, offset applied
+    //                    waiting for trigger (tap/shake) to start return
+    // Phase 4: RETURNING → clock counting back to real time
+    enum class Phase { BOOT, DARK, LIVE, RETURNING }
+
+    private var phase = Phase.BOOT
+
+    // ── Offset ──
     private var offsetMs = 0.0
-    private var isReturning = false
+    private var pendingSign: Char? = null
     private var returnStartTime = 0L
     private var returnStartOffset = 0.0
-    private var pendingSign: Char? = null
-    private var waitingForTapToReturn = false
-    private var blackoutActive = false
 
     // ── Settings ──
     private var styleiOS = true
-    private var returnMode = "shake"   // "shake" or "tap"
-    private var delayMode = "3"        // "0","3","5","tap"
-    private var returnSpeed = 30       // seconds
+    private var triggerTap = true       // tap screen to start return
+    private var triggerShake = true     // shake to start return
+    private var triggerDelay = 0        // seconds to wait after trigger before return starts
+    private var returnSpeed = 30        // seconds for full return animation
     private var shakeSens = 15f
 
     // ── Shake ──
@@ -52,24 +57,23 @@ class MainActivity : Activity(), SensorEventListener {
     private var lastAx = 0f; private var lastAy = 0f; private var lastAz = 0f
     private var shakeDebounce = 0L
 
-    // ── Keypad visibility ──
-    private var keypadAlpha = 0.12f
-    private var keypadFadeStart = 0L
-    private val KEYPAD_SHOW_MS = 1200L
-    private val KEYPAD_FADE_MS = 800L
+    // ── Keypad fade ──
+    private var keypadAlpha = 0f
+    private var bootTime = 0L
+    private val KEYPAD_SHOW_MS = 2000L
+    private val KEYPAD_FADE_MS = 600L
 
-    // ── Two-finger gesture ──
+    // ── Two-finger ──
     private var twoFingerStartY = 0f
     private var twoFingerActive = false
 
-    // ── Timers ──
+    // ── Misc ──
     private val handler = Handler(Looper.getMainLooper())
-    private var returnDelayRunnable: Runnable? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var prefs: SharedPreferences
-
-    // ── View ──
     private lateinit var clockView: ClockView
+
+    // ══════════════ LIFECYCLE ══════════════
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,6 +90,9 @@ class MainActivity : Activity(), SensorEventListener {
         prefs = getSharedPreferences("mc", Context.MODE_PRIVATE)
         loadSettings()
 
+        phase = Phase.BOOT
+        bootTime = System.currentTimeMillis()
+
         clockView = ClockView(this)
         setContentView(clockView)
         hideSystemUI()
@@ -96,11 +103,15 @@ class MainActivity : Activity(), SensorEventListener {
         }
 
         @Suppress("DEPRECATION")
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "mc:wake")
+        wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "mc:wake")
         wakeLock?.acquire(4 * 60 * 60 * 1000L)
 
-        showKeypadBriefly()
+        // After boot keypad fades, transition to DARK
+        handler.postDelayed({
+            if (phase == Phase.BOOT) phase = Phase.DARK
+        }, KEYPAD_SHOW_MS + KEYPAD_FADE_MS + 200)
+
         startTick()
     }
 
@@ -116,120 +127,84 @@ class MainActivity : Activity(), SensorEventListener {
         )
     }
 
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemUI()
-    }
-
+    override fun onWindowFocusChanged(f: Boolean) { super.onWindowFocusChanged(f); if (f) hideSystemUI() }
     override fun onResume() { super.onResume(); hideSystemUI() }
-
     override fun onDestroy() {
         super.onDestroy()
         sensorManager?.unregisterListener(this)
         wakeLock?.let { if (it.isHeld) it.release() }
     }
 
-    // ══════════════════════════════════════
-    //  TIME — Europe/Madrid
-    // ══════════════════════════════════════
+    // ══════════════ TIME ══════════════
 
-    private fun getMadridCalendar(): Calendar {
-        return Calendar.getInstance(TimeZone.getTimeZone("Europe/Madrid"))
-    }
+    private fun madridCal(): Calendar = Calendar.getInstance(TimeZone.getTimeZone("Europe/Madrid"))
 
-    private fun getMadridTimeMs(): Long {
-        val c = getMadridCalendar()
-        return (c.get(Calendar.HOUR_OF_DAY) * 3600000L +
-                c.get(Calendar.MINUTE) * 60000L +
-                c.get(Calendar.SECOND) * 1000L +
-                c.get(Calendar.MILLISECOND))
+    private fun madridTimeMs(): Long {
+        val c = madridCal()
+        return c.get(Calendar.HOUR_OF_DAY) * 3600000L +
+               c.get(Calendar.MINUTE) * 60000L +
+               c.get(Calendar.SECOND) * 1000L +
+               c.get(Calendar.MILLISECOND)
     }
 
     private fun msToHM(ms: Long): Pair<Int, Int> {
-        val day = 86400000L
-        val wrapped = ((ms % day) + day) % day
-        val totalSec = (wrapped / 1000).toInt()
-        return Pair(totalSec / 3600, (totalSec % 3600) / 60)
+        val d = 86400000L
+        val w = ((ms % d) + d) % d
+        val s = (w / 1000).toInt()
+        return Pair(s / 3600, (s % 3600) / 60)
     }
 
-    private fun getMadridDateString(): String {
-        val c = getMadridCalendar()
+    private fun madridDateStr(): String {
+        val c = madridCal()
         val days = arrayOf("domingo","lunes","martes","miércoles","jueves","viernes","sábado")
         val months = arrayOf("enero","febrero","marzo","abril","mayo","junio",
             "julio","agosto","septiembre","octubre","noviembre","diciembre")
-        val dow = days[c.get(Calendar.DAY_OF_WEEK) - 1]
-        val day = c.get(Calendar.DAY_OF_MONTH)
-        val month = months[c.get(Calendar.MONTH)]
-        return "${dow.replaceFirstChar { it.uppercase() }}, $day de $month"
+        return "${days[c.get(Calendar.DAY_OF_WEEK)-1].replaceFirstChar{it.uppercase()}}, ${c.get(Calendar.DAY_OF_MONTH)} de ${months[c.get(Calendar.MONTH)]}"
     }
 
-    // ══════════════════════════════════════
-    //  TICK LOOP
-    // ══════════════════════════════════════
+    // ══════════════ TICK ══════════════
 
     private fun startTick() {
         handler.post(object : Runnable {
             override fun run() {
-                updateReturn()
-                updateKeypadFade()
+                if (phase == Phase.RETURNING) updateReturn()
                 clockView.invalidate()
-                handler.postDelayed(this, 16) // ~60fps
+                handler.postDelayed(this, 16)
             }
         })
     }
 
     private fun updateReturn() {
-        if (!isReturning) return
         val elapsed = System.currentTimeMillis() - returnStartTime
         val dur = returnSpeed * 1000L
         if (elapsed >= dur) {
             offsetMs = 0.0
-            isReturning = false
+            phase = Phase.LIVE
         } else {
-            val t = (elapsed.toDouble() / dur)
+            val t = elapsed.toDouble() / dur
             val ease = 1.0 - (1.0 - t).pow(3.0)
             offsetMs = returnStartOffset * (1.0 - ease)
         }
     }
 
-    // ══════════════════════════════════════
-    //  KEYPAD
-    // ══════════════════════════════════════
-
-    private fun showKeypadBriefly() {
-        keypadAlpha = 0.12f
-        keypadFadeStart = System.currentTimeMillis() + KEYPAD_SHOW_MS
-    }
-
-    private fun updateKeypadFade() {
-        val now = System.currentTimeMillis()
-        if (keypadAlpha <= 0f) return
-        if (now < keypadFadeStart) {
-            keypadAlpha = 0.12f
-        } else {
-            val fadeElapsed = now - keypadFadeStart
-            keypadAlpha = 0.12f * (1f - (fadeElapsed.toFloat() / KEYPAD_FADE_MS).coerceIn(0f, 1f))
-        }
-    }
+    // ══════════════ KEY HANDLING ══════════════
 
     private fun handleKey(key: String) {
-        showKeypadBriefly()
+        // Only accept input during BOOT or DARK phase
+        if (phase != Phase.BOOT && phase != Phase.DARK) return
 
         if (key == "+" || key == "-") {
             pendingSign = key[0]
-            blackoutActive = true
-            clockView.invalidate()
             return
         }
 
         val digit = key.toIntOrNull() ?: return
 
         if (digit == 0) {
+            // Reset — go to LIVE with no offset
             pendingSign = null
-            cancelReturn()
             offsetMs = 0.0
-            blackoutActive = false
-            clockView.invalidate()
+            goLive()
             return
         }
 
@@ -237,53 +212,34 @@ class MainActivity : Activity(), SensorEventListener {
             val sign = if (pendingSign == '+') 1 else -1
             offsetMs = sign * digit * 60000.0
             pendingSign = null
-            cancelReturn()
-            handler.postDelayed({
-                blackoutActive = false
-                clockView.invalidate()
-            }, 80)
-            scheduleReturn()
+            goLive()
         }
     }
 
-    // ══════════════════════════════════════
-    //  RETURN LOGIC
-    // ══════════════════════════════════════
-
-    private fun cancelReturn() {
-        isReturning = false
-        waitingForTapToReturn = false
-        returnDelayRunnable?.let { handler.removeCallbacks(it) }
-        returnDelayRunnable = null
-    }
-
-    private fun scheduleReturn() {
-        if (delayMode == "tap") {
-            waitingForTapToReturn = true
-            return
-        }
-        val sec = delayMode.toIntOrNull() ?: 0
-        val r = Runnable { startReturn() }
-        returnDelayRunnable = r
-        handler.postDelayed(r, sec * 1000L)
-    }
-
-    private fun startReturn() {
-        if (abs(offsetMs) < 100) { offsetMs = 0.0; return }
-        isReturning = true
-        returnStartTime = System.currentTimeMillis()
-        returnStartOffset = offsetMs
-        waitingForTapToReturn = false
+    private fun goLive() {
+        phase = Phase.LIVE
     }
 
     private fun triggerReturn() {
-        if (waitingForTapToReturn) { startReturn(); return }
-        if (abs(offsetMs) > 100 && !isReturning) startReturn()
+        if (phase != Phase.LIVE) return
+        // Apply delay then start return
+        if (triggerDelay > 0) {
+            handler.postDelayed({
+                startReturn()
+            }, triggerDelay * 1000L)
+        } else {
+            startReturn()
+        }
     }
 
-    // ══════════════════════════════════════
-    //  SHAKE
-    // ══════════════════════════════════════
+    private fun startReturn() {
+        if (abs(offsetMs) < 500) { offsetMs = 0.0; return }
+        phase = Phase.RETURNING
+        returnStartTime = System.currentTimeMillis()
+        returnStartOffset = offsetMs
+    }
+
+    // ══════════════ SHAKE ══════════════
 
     override fun onSensorChanged(event: SensorEvent?) {
         val e = event ?: return
@@ -293,56 +249,18 @@ class MainActivity : Activity(), SensorEventListener {
         val now = System.currentTimeMillis()
         if (mag > shakeSens && now - shakeDebounce > 800) {
             shakeDebounce = now
-            if (returnMode == "shake") triggerReturn()
+            if (triggerShake && phase == Phase.LIVE) triggerReturn()
         }
     }
+    override fun onAccuracyChanged(s: Sensor?, a: Int) {}
 
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
-
-    // ══════════════════════════════════════
-    //  SECRET MENU
-    // ══════════════════════════════════════
-
-    private fun openSecretMenu() {
-        val items = arrayOf(
-            "Estilo: ${if (styleiOS) "iOS" else "Android"}  → cambiar",
-            "Retorno: $returnMode  → cambiar",
-            "Delay: $delayMode  → cambiar",
-            "Velocidad retorno: ${returnSpeed}s  → cambiar",
-            "Sensibilidad shake: ${shakeSens.toInt()}  → cambiar",
-            "Calibrar hora (reset offset)",
-            "Cerrar"
-        )
-        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
-            .setTitle("Configuración")
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> { styleiOS = !styleiOS; saveSettings(); openSecretMenu() }
-                    1 -> { returnMode = if (returnMode == "shake") "tap" else "shake"; saveSettings(); openSecretMenu() }
-                    2 -> {
-                        val opts = arrayOf("0","3","5","tap")
-                        val next = opts[(opts.indexOf(delayMode) + 1) % opts.size]
-                        delayMode = next; saveSettings(); openSecretMenu()
-                    }
-                    3 -> {
-                        returnSpeed = if (returnSpeed >= 120) 10 else returnSpeed + 10
-                        saveSettings(); openSecretMenu()
-                    }
-                    4 -> {
-                        shakeSens = if (shakeSens >= 40f) 5f else shakeSens + 5f
-                        saveSettings(); openSecretMenu()
-                    }
-                    5 -> { offsetMs = 0.0; cancelReturn() }
-                    6 -> { /* close */ }
-                }
-            }
-            .show()
-    }
+    // ══════════════ SETTINGS ══════════════
 
     private fun loadSettings() {
         styleiOS = prefs.getBoolean("ios", true)
-        returnMode = prefs.getString("returnMode", "shake") ?: "shake"
-        delayMode = prefs.getString("delayMode", "3") ?: "3"
+        triggerTap = prefs.getBoolean("triggerTap", true)
+        triggerShake = prefs.getBoolean("triggerShake", true)
+        triggerDelay = prefs.getInt("triggerDelay", 0)
         returnSpeed = prefs.getInt("returnSpeed", 30)
         shakeSens = prefs.getFloat("shakeSens", 15f)
     }
@@ -350,25 +268,209 @@ class MainActivity : Activity(), SensorEventListener {
     private fun saveSettings() {
         prefs.edit()
             .putBoolean("ios", styleiOS)
-            .putString("returnMode", returnMode)
-            .putString("delayMode", delayMode)
+            .putBoolean("triggerTap", triggerTap)
+            .putBoolean("triggerShake", triggerShake)
+            .putInt("triggerDelay", triggerDelay)
             .putInt("returnSpeed", returnSpeed)
             .putFloat("shakeSens", shakeSens)
             .apply()
     }
 
-    // ══════════════════════════════════════
-    //  CUSTOM VIEW
-    // ══════════════════════════════════════
+    // ══════════════ SECRET MENU ══════════════
+
+    private fun openSecretMenu() {
+        val dialog = Dialog(this, android.R.style.Theme_DeviceDefault_NoActionBar)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.window?.setLayout(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT
+        )
+        dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        dialog.window?.setDimAmount(0.85f)
+
+        val scroll = ScrollView(this).apply {
+            setPadding(dp(24), dp(60), dp(24), dp(40))
+        }
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+
+        // Title
+        root.addView(TextView(this@MainActivity).apply {
+            text = "⚙️  Configuración"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dp(24))
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        })
+
+        // ── Style ──
+        root.addView(makeLabel("ESTILO"))
+        root.addView(makeToggleRow(
+            listOf("iOS" to styleiOS, "Android" to !styleiOS)
+        ) { idx ->
+            styleiOS = idx == 0
+            saveSettings()
+        })
+
+        // ── Trigger mode ──
+        root.addView(makeLabel("ACTIVAR RETORNO CON"))
+        root.addView(makeToggleRow(
+            listOf("Tocar pantalla" to triggerTap, "Agitar" to triggerShake)
+        ) { idx ->
+            if (idx == 0) triggerTap = !triggerTap
+            if (idx == 1) triggerShake = !triggerShake
+            // At least one must be active
+            if (!triggerTap && !triggerShake) triggerTap = true
+            saveSettings()
+        })
+
+        // ── Trigger delay ──
+        root.addView(makeLabel("ESPERA ANTES DE INICIAR RETORNO"))
+        root.addView(makeToggleRow(
+            listOf("0s" to (triggerDelay==0), "3s" to (triggerDelay==3),
+                   "5s" to (triggerDelay==5), "10s" to (triggerDelay==10))
+        ) { idx ->
+            triggerDelay = listOf(0, 3, 5, 10)[idx]
+            saveSettings()
+        })
+
+        // ── Return speed ──
+        root.addView(makeLabel("VELOCIDAD DE RETORNO: ${returnSpeed}s"))
+        val speedBar = SeekBar(this).apply {
+            max = 23  // 5 to 120 in steps of 5
+            progress = (returnSpeed - 5) / 5
+            setPadding(dp(8), dp(8), dp(8), dp(16))
+        }
+        val speedLabel = root.getChildAt(root.childCount - 1) as TextView
+        speedBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, u: Boolean) {
+                returnSpeed = 5 + p * 5
+                speedLabel.text = "VELOCIDAD DE RETORNO: ${returnSpeed}s"
+                saveSettings()
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+        root.addView(speedBar)
+
+        // ── Shake sensitivity ──
+        root.addView(makeLabel("SENSIBILIDAD SHAKE: ${shakeSens.toInt()}"))
+        val shakeBar = SeekBar(this).apply {
+            max = 35  // 5 to 40
+            progress = shakeSens.toInt() - 5
+            setPadding(dp(8), dp(8), dp(8), dp(16))
+        }
+        val shakeLabel = root.getChildAt(root.childCount - 1) as TextView
+        shakeBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, u: Boolean) {
+                shakeSens = (5 + p).toFloat()
+                shakeLabel.text = "SENSIBILIDAD SHAKE: ${shakeSens.toInt()}"
+                saveSettings()
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+        root.addView(shakeBar)
+
+        // ── Reset / Calibrate ──
+        root.addView(makeButton("Calibrar hora (reset)") {
+            offsetMs = 0.0
+            phase = Phase.DARK
+        })
+
+        root.addView(makeButton("Reiniciar (pantalla negra)") {
+            offsetMs = 0.0
+            pendingSign = null
+            phase = Phase.BOOT
+            bootTime = System.currentTimeMillis()
+            handler.postDelayed({ if (phase == Phase.BOOT) phase = Phase.DARK }, KEYPAD_SHOW_MS + KEYPAD_FADE_MS + 200)
+            dialog.dismiss()
+        })
+
+        // ── Close ──
+        root.addView(View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(16))
+        })
+        root.addView(makeButton("Cerrar") { dialog.dismiss() })
+
+        scroll.addView(root)
+        dialog.setContentView(scroll)
+        dialog.show()
+    }
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    private fun makeLabel(text: String): TextView {
+        return TextView(this).apply {
+            this.text = text
+            textSize = 11f
+            setTextColor(Color.argb(120, 255, 255, 255))
+            letterSpacing = 0.12f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            setPadding(0, dp(18), 0, dp(8))
+        }
+    }
+
+    private fun makeToggleRow(items: List<Pair<String, Boolean>>, onClick: (Int) -> Unit): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, dp(4))
+        }
+        items.forEachIndexed { idx, (label, active) ->
+            row.addView(TextView(this).apply {
+                text = label
+                textSize = 13f
+                gravity = Gravity.CENTER
+                setPadding(dp(8), dp(10), dp(8), dp(10))
+                val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                lp.setMargins(if (idx > 0) dp(4) else 0, 0, 0, 0)
+                layoutParams = lp
+                if (active) {
+                    setTextColor(Color.WHITE)
+                    setBackgroundColor(Color.argb(40, 255, 255, 255))
+                } else {
+                    setTextColor(Color.argb(140, 255, 255, 255))
+                    setBackgroundColor(Color.argb(12, 255, 255, 255))
+                }
+                setOnClickListener {
+                    onClick(idx)
+                    // Refresh menu
+                    (parent as? View)?.let { p ->
+                        val dialog = (p.parent as? View)?.let { findParentDialog(it) }
+                    }
+                }
+            })
+        }
+        return row
+    }
+
+    private fun findParentDialog(v: View): Dialog? = null // unused helper
+
+    private fun makeButton(text: String, action: () -> Unit): TextView {
+        return TextView(this).apply {
+            this.text = text
+            textSize = 15f
+            setTextColor(Color.argb(200, 255, 255, 255))
+            gravity = Gravity.CENTER
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setBackgroundColor(Color.argb(18, 255, 255, 255))
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp.setMargins(0, dp(8), 0, 0)
+            layoutParams = lp
+            setOnClickListener { action() }
+        }
+    }
+
+    // ══════════════ CLOCK VIEW ══════════════
 
     inner class ClockView(ctx: Context) : View(ctx) {
-        private val paintTime = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val paintDate = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val paintKeypad = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val paintBlackout = Paint()
-        private val paintLock = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG)
 
-        // Keypad grid: 4 rows x 3 cols
         private val keys = arrayOf(
             arrayOf("1","2","3"),
             arrayOf("4","5","6"),
@@ -376,144 +478,147 @@ class MainActivity : Activity(), SensorEventListener {
             arrayOf("+","0","-")
         )
 
-        // Long press for menu
-        private var longPressStart = 0L
-        private var longPressX = 0f
-        private var longPressY = 0f
-        private val LONG_PRESS_MS = 2000L
-
-        init {
-            paintBlackout.color = Color.BLACK
-            paintBlackout.style = Paint.Style.FILL
-            paintLock.color = Color.WHITE
-            paintLock.textAlign = Paint.Align.CENTER
-        }
-
         override fun onDraw(canvas: Canvas) {
             val w = width.toFloat()
             val h = height.toFloat()
 
-            // ── Background gradient ──
-            val grad = LinearGradient(0f, 0f, w, h,
+            when (phase) {
+                Phase.BOOT -> drawBoot(canvas, w, h)
+                Phase.DARK -> drawDark(canvas, w, h)
+                Phase.LIVE, Phase.RETURNING -> drawLive(canvas, w, h)
+            }
+        }
+
+        // ── BOOT: black + fading keypad ──
+        private fun drawBoot(canvas: Canvas, w: Float, h: Float) {
+            canvas.drawColor(Color.BLACK)
+            val elapsed = System.currentTimeMillis() - bootTime
+            val alpha = when {
+                elapsed < KEYPAD_SHOW_MS -> 0.14f
+                elapsed < KEYPAD_SHOW_MS + KEYPAD_FADE_MS -> {
+                    val fade = (elapsed - KEYPAD_SHOW_MS).toFloat() / KEYPAD_FADE_MS
+                    0.14f * (1f - fade)
+                }
+                else -> 0f
+            }
+            if (alpha > 0.001f) drawKeypad(canvas, w, h, alpha)
+        }
+
+        // ── DARK: just black ──
+        private fun drawDark(canvas: Canvas, w: Float, h: Float) {
+            canvas.drawColor(Color.BLACK)
+        }
+
+        // ── LIVE: wallpaper + clock ──
+        private fun drawLive(canvas: Canvas, w: Float, h: Float) {
+            // Background gradient
+            val grad = LinearGradient(0f, 0f, w * 0.3f, h,
                 intArrayOf(Color.rgb(10,10,46), Color.rgb(26,10,58), Color.rgb(10,26,46)),
                 floatArrayOf(0f, 0.4f, 1f), Shader.TileMode.CLAMP)
-            val bgPaint = Paint()
-            bgPaint.shader = grad
-            canvas.drawRect(0f, 0f, w, h, bgPaint)
+            p.shader = grad
+            p.style = Paint.Style.FILL
+            canvas.drawRect(0f, 0f, w, h, p)
+            p.shader = null
 
-            // ── Blackout ──
-            if (blackoutActive) {
-                canvas.drawRect(0f, 0f, w, h, paintBlackout)
-                // Still draw keypad on top of blackout
-                drawKeypad(canvas, w, h)
-                return
-            }
+            // Lock icon
+            p.textSize = w * 0.04f
+            p.color = Color.argb(90, 255, 255, 255)
+            p.textAlign = Paint.Align.CENTER
+            p.typeface = Typeface.DEFAULT
+            canvas.drawText("🔒", w / 2f, h * 0.055f, p)
 
-            // ── Lock icon (small text) ──
-            paintLock.textSize = w * 0.035f
-            paintLock.alpha = 100
-            canvas.drawText("🔒", w / 2f, h * 0.06f, paintLock)
-
-            // ── Clock ──
-            val realMs = getMadridTimeMs()
+            // Time
+            val realMs = madridTimeMs()
             val displayMs = realMs + offsetMs.toLong()
             val (hr, mn) = msToHM(displayMs)
             val timeStr = String.format(Locale.US, "%02d:%02d", hr, mn)
 
+            p.color = Color.WHITE
+            p.textAlign = Paint.Align.CENTER
+            p.setShadowLayer(24f, 0f, 2f, Color.argb(60, 0, 0, 0))
+
             if (styleiOS) {
-                paintTime.typeface = Typeface.create("sans-serif", Typeface.BOLD)
-                paintTime.textSize = w * 0.22f
+                p.typeface = Typeface.create("sans-serif", Typeface.BOLD)
+                p.textSize = w * 0.22f
             } else {
-                paintTime.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
-                paintTime.textSize = w * 0.20f
+                p.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+                p.textSize = w * 0.20f
             }
-            paintTime.color = Color.WHITE
-            paintTime.textAlign = Paint.Align.CENTER
-            paintTime.setShadowLayer(20f, 0f, 2f, Color.argb(80, 0, 0, 0))
 
             val timeY = if (styleiOS) h * 0.22f else h * 0.26f
-            canvas.drawText(timeStr, w / 2f, timeY, paintTime)
+            canvas.drawText(timeStr, w / 2f, timeY, p)
+            p.clearShadowLayer()
 
-            // ── Date ──
-            paintDate.color = Color.WHITE
-            paintDate.alpha = 200
-            paintDate.textAlign = Paint.Align.CENTER
-            paintDate.typeface = if (styleiOS)
+            // Date
+            p.color = Color.argb(200, 255, 255, 255)
+            p.typeface = if (styleiOS)
                 Typeface.create("sans-serif", Typeface.NORMAL)
             else
                 Typeface.create("sans-serif-light", Typeface.NORMAL)
-            paintDate.textSize = if (styleiOS) w * 0.048f else w * 0.042f
-            canvas.drawText(getMadridDateString(), w / 2f, timeY + w * 0.07f, paintDate)
+            p.textSize = if (styleiOS) w * 0.048f else w * 0.042f
+            canvas.drawText(madridDateStr(), w / 2f, timeY + w * 0.075f, p)
 
-            // ── Bottom bar ──
-            val barPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-            barPaint.color = Color.argb(80, 255, 255, 255)
-            val barW = w * 0.35f
-            val barH = h * 0.005f
+            // Bottom pill
+            p.color = Color.argb(70, 255, 255, 255)
+            p.style = Paint.Style.FILL
+            val bw = w * 0.35f
+            val bh = h * 0.005f
             canvas.drawRoundRect(
-                w / 2f - barW / 2f, h - h * 0.03f,
-                w / 2f + barW / 2f, h - h * 0.03f + barH,
-                barH, barH, barPaint
+                w/2f - bw/2f, h - h*0.025f,
+                w/2f + bw/2f, h - h*0.025f + bh,
+                bh, bh, p
             )
-
-            // ── Keypad overlay ──
-            drawKeypad(canvas, w, h)
         }
 
-        private fun drawKeypad(canvas: Canvas, w: Float, h: Float) {
-            if (keypadAlpha <= 0.001f) return
-            paintKeypad.color = Color.WHITE
-            paintKeypad.alpha = (keypadAlpha * 255).toInt()
-            paintKeypad.textAlign = Paint.Align.CENTER
-            paintKeypad.textSize = w * 0.08f
-            paintKeypad.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+        private fun drawKeypad(canvas: Canvas, w: Float, h: Float, alpha: Float) {
+            p.color = Color.WHITE
+            p.alpha = (alpha * 255).toInt()
+            p.textAlign = Paint.Align.CENTER
+            p.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+            p.style = Paint.Style.FILL
+            p.clearShadowLayer()
+            p.shader = null
 
-            val rows = 4
-            val cols = 3
             val padTop = h * 0.08f
             val padBot = h * 0.05f
-            val rowH = (h - padTop - padBot) / rows
+            val rowH = (h - padTop - padBot) / 4f
 
-            for (r in 0 until rows) {
-                for (c in 0 until cols) {
-                    val cx = w * (c + 0.5f) / cols
+            for (r in 0..3) {
+                for (c in 0..2) {
+                    val cx = w * (c + 0.5f) / 3f
                     val cy = padTop + rowH * r + rowH / 2f
                     val label = keys[r][c]
-                    // + and - slightly larger
-                    if (label == "+" || label == "-") {
-                        paintKeypad.textSize = w * 0.10f
-                    } else {
-                        paintKeypad.textSize = w * 0.08f
-                    }
-                    canvas.drawText(label, cx, cy + paintKeypad.textSize * 0.35f, paintKeypad)
+                    p.textSize = if (label == "+" || label == "-") w * 0.10f else w * 0.08f
+                    canvas.drawText(label, cx, cy + p.textSize * 0.35f, p)
                 }
             }
         }
 
         fun getKeyAt(x: Float, y: Float): String? {
-            val w = width.toFloat()
             val h = height.toFloat()
+            val w = width.toFloat()
             val padTop = h * 0.08f
             val padBot = h * 0.05f
-            val rowH = (h - padTop - padBot) / 4
+            val rowH = (h - padTop - padBot) / 4f
             val colW = w / 3f
-
             val row = ((y - padTop) / rowH).toInt()
             val col = (x / colW).toInt()
-
-            if (row in 0..3 && col in 0..2) {
-                return keys[row][col]
-            }
+            if (row in 0..3 && col in 0..2) return keys[row][col]
             return null
         }
+
+        // ── TOUCH ──
+        private var downTime = 0L
+        private var downX = 0f
+        private var downY = 0f
 
         @Suppress("ClickableViewAccessibility")
         override fun onTouchEvent(event: MotionEvent): Boolean {
             val action = event.actionMasked
-            val pointerCount = event.pointerCount
+            val count = event.pointerCount
 
-            // Two-finger gestures
-            if (pointerCount == 2) {
+            // ── Two-finger gestures ──
+            if (count == 2) {
                 when (action) {
                     MotionEvent.ACTION_POINTER_DOWN -> {
                         twoFingerActive = true
@@ -521,47 +626,46 @@ class MainActivity : Activity(), SensorEventListener {
                     }
                     MotionEvent.ACTION_MOVE -> {
                         if (twoFingerActive) {
-                            val curY = (event.getY(0) + event.getY(1)) / 2f
-                            val delta = curY - twoFingerStartY
-                            if (delta > 80) {
-                                twoFingerActive = false
-                                openSecretMenu()
-                            } else if (delta < -80) {
-                                twoFingerActive = false
-                                finishAndRemoveTask()
-                            }
+                            val cur = (event.getY(0) + event.getY(1)) / 2f
+                            val d = cur - twoFingerStartY
+                            if (d > 100) { twoFingerActive = false; openSecretMenu() }
+                            else if (d < -100) { twoFingerActive = false; finishAndRemoveTask() }
                         }
                     }
                 }
                 return true
             }
-
             twoFingerActive = false
 
+            // ── Single touch ──
             when (action) {
                 MotionEvent.ACTION_DOWN -> {
-                    longPressStart = System.currentTimeMillis()
-                    longPressX = event.x
-                    longPressY = event.y
+                    downTime = System.currentTimeMillis()
+                    downX = event.x
+                    downY = event.y
                 }
                 MotionEvent.ACTION_UP -> {
-                    val dt = System.currentTimeMillis() - longPressStart
-                    val dx = abs(event.x - longPressX)
-                    val dy = abs(event.y - longPressY)
+                    val dt = System.currentTimeMillis() - downTime
+                    val dx = abs(event.x - downX)
+                    val dy = abs(event.y - downY)
 
-                    // Long press top center = menu
-                    if (dt >= LONG_PRESS_MS && dy < 50 && longPressY < height * 0.1f) {
+                    // Long press top area → menu (backup)
+                    if (dt >= 2000L && dy < 60 && downY < height * 0.1f) {
                         openSecretMenu()
                         return true
                     }
 
-                    // Normal tap = keypad or return trigger
-                    if (dt < 500 && dx < 30 && dy < 30) {
-                        val key = getKeyAt(event.x, event.y)
-                        if (key != null) {
-                            handleKey(key)
-                        } else if (returnMode == "tap") {
-                            triggerReturn()
+                    // Short tap
+                    if (dt < 400 && dx < 40 && dy < 40) {
+                        when (phase) {
+                            Phase.BOOT, Phase.DARK -> {
+                                val key = getKeyAt(event.x, event.y)
+                                if (key != null) handleKey(key)
+                            }
+                            Phase.LIVE -> {
+                                if (triggerTap) triggerReturn()
+                            }
+                            Phase.RETURNING -> { /* do nothing */ }
                         }
                     }
                 }
