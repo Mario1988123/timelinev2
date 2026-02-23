@@ -47,14 +47,16 @@ class MainActivity : Activity(), SensorEventListener {
     private var triggerDelay = 0
     private var returnSpeed = 30
     private var shakeSens = 15f
+    private var keypadShowSec = 2       // seconds the keypad stays visible
+    private var baseOffset = 0          // base minutes to add to keypad input
 
     private var sensorManager: SensorManager? = null
     private var lastAx = 0f; private var lastAy = 0f; private var lastAz = 0f
     private var shakeDebounce = 0L
 
     private var bootTime = 0L
-    private val KEYPAD_SHOW_MS = 2000L
     private val KEYPAD_FADE_MS = 600L
+    private fun keypadShowMs(): Long = keypadShowSec * 1000L
 
     private var twoFingerStartY = 0f
     private var twoFingerActive = false
@@ -88,7 +90,7 @@ class MainActivity : Activity(), SensorEventListener {
         wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "mc:wake")
         wakeLock?.acquire(4 * 60 * 60 * 1000L)
-        handler.postDelayed({ if (phase == Phase.BOOT) phase = Phase.DARK }, KEYPAD_SHOW_MS + KEYPAD_FADE_MS + 200)
+        handler.postDelayed({ if (phase == Phase.BOOT) phase = Phase.DARK }, keypadShowMs() + KEYPAD_FADE_MS + 200)
         startTick()
     }
 
@@ -150,7 +152,8 @@ class MainActivity : Activity(), SensorEventListener {
         val digit = key.toIntOrNull() ?: return
         if (digit == 0) { pendingSign = null; offsetMs = 0.0; goLive(); return }
         if (pendingSign != null && digit in 1..9) {
-            offsetMs = (if (pendingSign == '+') 1 else -1) * digit * 60000.0
+            val totalMinutes = digit + baseOffset
+            offsetMs = (if (pendingSign == '+') 1 else -1) * totalMinutes * 60000.0
             pendingSign = null; goLive()
         }
     }
@@ -221,11 +224,14 @@ class MainActivity : Activity(), SensorEventListener {
         triggerDelay = prefs.getInt("triggerDelay", 0)
         returnSpeed = prefs.getInt("returnSpeed", 30)
         shakeSens = prefs.getFloat("shakeSens", 15f)
+        keypadShowSec = prefs.getInt("keypadShowSec", 2)
+        baseOffset = prefs.getInt("baseOffset", 0)
     }
     private fun saveSettings() {
         prefs.edit().putBoolean("ios", styleiOS).putBoolean("triggerTap", triggerTap)
             .putBoolean("triggerShake", triggerShake).putInt("triggerDelay", triggerDelay)
-            .putInt("returnSpeed", returnSpeed).putFloat("shakeSens", shakeSens).apply()
+            .putInt("returnSpeed", returnSpeed).putFloat("shakeSens", shakeSens)
+            .putInt("keypadShowSec", keypadShowSec).putInt("baseOffset", baseOffset).apply()
     }
 
     // ══════════════════════════════════════════════════
@@ -311,6 +317,24 @@ class MainActivity : Activity(), SensorEventListener {
             })
         })
 
+        // ── Keypad visibility duration ──
+        val kpLabel = mkSection("TECLADO VISIBLE: ${keypadShowSec}s")
+        root.addView(kpLabel)
+        root.addView(mkSingleSelect(listOf("1s", "2s", "3s", "4s", "5s"), keypadShowSec - 1) { i ->
+            keypadShowSec = i + 1; kpLabel.text = "TECLADO VISIBLE: ${keypadShowSec}s"; saveSettings()
+        })
+
+        // ── Base offset ──
+        val boLabel = mkSection("MINUTOS BASE: $baseOffset")
+        root.addView(boLabel)
+        root.addView(TextView(this).apply {
+            text = "Se suma al dígito del teclado. Ej: base 3 + teclado 5 = 8 min"
+            textSize = 11f; setTextColor(Color.argb(80, 255, 255, 255)); setPadding(0, 0, 0, dp(6))
+        })
+        root.addView(mkSingleSelect(listOf("0", "1", "2", "3", "4", "5"), baseOffset.coerceIn(0, 5)) { i ->
+            baseOffset = i; boLabel.text = "MINUTOS BASE: $baseOffset"; saveSettings()
+        })
+
         // ── Wallpaper ──
         root.addView(mkSection("FONDO DE PANTALLA"))
         val wpStatus = TextView(this).apply {
@@ -330,7 +354,7 @@ class MainActivity : Activity(), SensorEventListener {
         root.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(20)) })
         root.addView(mkBtn("Reiniciar (pantalla negra)") {
             offsetMs = 0.0; pendingSign = null; phase = Phase.BOOT; bootTime = System.currentTimeMillis()
-            handler.postDelayed({ if (phase == Phase.BOOT) phase = Phase.DARK }, KEYPAD_SHOW_MS + KEYPAD_FADE_MS + 200)
+            handler.postDelayed({ if (phase == Phase.BOOT) phase = Phase.DARK }, keypadShowMs() + KEYPAD_FADE_MS + 200)
             dlg.dismiss()
         })
         root.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(14)) })
@@ -432,8 +456,8 @@ class MainActivity : Activity(), SensorEventListener {
         private fun calcBootAlpha(): Float {
             val e = System.currentTimeMillis() - bootTime
             return when {
-                e < KEYPAD_SHOW_MS -> 0.14f
-                e < KEYPAD_SHOW_MS + KEYPAD_FADE_MS -> 0.14f * (1f - (e - KEYPAD_SHOW_MS).toFloat() / KEYPAD_FADE_MS)
+                e < keypadShowMs() -> 0.14f
+                e < keypadShowMs() + KEYPAD_FADE_MS -> 0.14f * (1f - (e - keypadShowMs()).toFloat() / KEYPAD_FADE_MS)
                 else -> 0f
             }
         }
@@ -476,27 +500,41 @@ class MainActivity : Activity(), SensorEventListener {
             canvas.drawRoundRect(w/2f - bw/2f, h - h*0.025f, w/2f + bw/2f, h - h*0.025f + bh, bh, bh, p)
         }
 
-        // iOS-style lock icon: filled body + shackle arc
+        // iOS-style lock icon: shackle perfectly connected to body
         private fun drawLockIcon(canvas: Canvas, cx: Float, cy: Float, r: Float) {
-            lockP.color = Color.WHITE; lockP.alpha = 180; lockP.shader = null; lockP.clearShadowLayer()
+            lockP.color = Color.WHITE; lockP.alpha = 190; lockP.shader = null; lockP.clearShadowLayer()
+            val stroke = r * 0.28f
 
-            // Shackle (thick arc on top)
-            lockP.style = Paint.Style.STROKE; lockP.strokeWidth = r * 0.32f; lockP.strokeCap = Paint.Cap.ROUND
-            val shackleW = r * 0.65f; val shackleH = r * 1.0f
-            canvas.drawArc(RectF(cx - shackleW, cy - shackleH * 1.6f, cx + shackleW, cy - shackleH * 0.1f), 180f, 180f, false, lockP)
+            // Dimensions
+            val bodyW = r * 1.05f    // half-width of body
+            val bodyH = r * 1.2f     // height of body
+            val shackleW = r * 0.58f // half-width of shackle (inner to stroke center)
+            val bodyTop = cy         // top edge of body
 
-            // Body (filled rounded rect)
+            // Shackle — arc that starts exactly at body top corners
+            lockP.style = Paint.Style.STROKE; lockP.strokeWidth = stroke; lockP.strokeCap = Paint.Cap.BUTT
+            val shackleTop = bodyTop - r * 1.2f
+            canvas.drawArc(
+                RectF(cx - shackleW, shackleTop, cx + shackleW, bodyTop),
+                180f, 180f, false, lockP
+            )
+            // Two vertical lines from arc ends down to body top
+            canvas.drawLine(cx - shackleW, bodyTop - stroke * 0.1f, cx - shackleW, bodyTop + stroke * 0.3f, lockP)
+            canvas.drawLine(cx + shackleW, bodyTop - stroke * 0.1f, cx + shackleW, bodyTop + stroke * 0.3f, lockP)
+
+            // Body — filled rounded rect
             lockP.style = Paint.Style.FILL
-            val bodyW = r * 1.0f; val bodyH = r * 1.1f
-            val bodyTop = cy - r * 0.15f
-            canvas.drawRoundRect(RectF(cx - bodyW, bodyTop, cx + bodyW, bodyTop + bodyH), r * 0.18f, r * 0.18f, lockP)
+            canvas.drawRoundRect(
+                RectF(cx - bodyW, bodyTop, cx + bodyW, bodyTop + bodyH),
+                r * 0.2f, r * 0.2f, lockP
+            )
 
-            // Keyhole (dark circle + line)
-            lockP.color = Color.argb(180, 30, 30, 60)
-            val holeY = bodyTop + bodyH * 0.38f
-            canvas.drawCircle(cx, holeY, r * 0.16f, lockP)
-            lockP.strokeWidth = r * 0.12f; lockP.style = Paint.Style.STROKE; lockP.strokeCap = Paint.Cap.ROUND
-            canvas.drawLine(cx, holeY + r * 0.12f, cx, holeY + r * 0.35f, lockP)
+            // Keyhole
+            lockP.color = Color.argb(170, 20, 20, 50)
+            val holeY = bodyTop + bodyH * 0.37f
+            canvas.drawCircle(cx, holeY, r * 0.15f, lockP)
+            lockP.strokeWidth = r * 0.11f; lockP.style = Paint.Style.STROKE; lockP.strokeCap = Paint.Cap.ROUND
+            canvas.drawLine(cx, holeY + r * 0.1f, cx, holeY + r * 0.35f, lockP)
         }
 
         private fun drawKeypad(canvas: Canvas, w: Float, h: Float, alpha: Float) {
