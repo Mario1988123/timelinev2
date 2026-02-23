@@ -278,8 +278,12 @@ class MainActivity : Activity(), SensorEventListener {
 
     // ══════════════ SECRET MENU ══════════════
 
+    private var currentMenuDialog: Dialog? = null
+
     private fun openSecretMenu() {
+        currentMenuDialog?.dismiss()
         val dialog = Dialog(this, android.R.style.Theme_DeviceDefault_NoActionBar)
+        currentMenuDialog = dialog
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.window?.setLayout(
@@ -315,6 +319,7 @@ class MainActivity : Activity(), SensorEventListener {
         ) { idx ->
             styleiOS = idx == 0
             saveSettings()
+            dialog.dismiss(); openSecretMenu()
         })
 
         // ── Trigger mode ──
@@ -324,9 +329,9 @@ class MainActivity : Activity(), SensorEventListener {
         ) { idx ->
             if (idx == 0) triggerTap = !triggerTap
             if (idx == 1) triggerShake = !triggerShake
-            // At least one must be active
             if (!triggerTap && !triggerShake) triggerTap = true
             saveSettings()
+            dialog.dismiss(); openSecretMenu()
         })
 
         // ── Trigger delay ──
@@ -337,6 +342,7 @@ class MainActivity : Activity(), SensorEventListener {
         ) { idx ->
             triggerDelay = listOf(0, 3, 5, 10)[idx]
             saveSettings()
+            dialog.dismiss(); openSecretMenu()
         })
 
         // ── Return speed ──
@@ -439,17 +445,11 @@ class MainActivity : Activity(), SensorEventListener {
                 }
                 setOnClickListener {
                     onClick(idx)
-                    // Refresh menu
-                    (parent as? View)?.let { p ->
-                        val dialog = (p.parent as? View)?.let { findParentDialog(it) }
-                    }
                 }
             })
         }
         return row
     }
-
-    private fun findParentDialog(v: View): Dialog? = null // unused helper
 
     private fun makeButton(text: String, action: () -> Unit): TextView {
         return TextView(this).apply {
@@ -520,12 +520,8 @@ class MainActivity : Activity(), SensorEventListener {
             canvas.drawRect(0f, 0f, w, h, p)
             p.shader = null
 
-            // Lock icon
-            p.textSize = w * 0.04f
-            p.color = Color.argb(90, 255, 255, 255)
-            p.textAlign = Paint.Align.CENTER
-            p.typeface = Typeface.DEFAULT
-            canvas.drawText("🔒", w / 2f, h * 0.055f, p)
+            // Lock icon — drawn with Canvas (white, no color/gradient)
+            drawLockIcon(canvas, w / 2f, h * 0.055f, w * 0.025f)
 
             // Time
             val realMs = madridTimeMs()
@@ -568,6 +564,23 @@ class MainActivity : Activity(), SensorEventListener {
                 w/2f + bw/2f, h - h*0.025f + bh,
                 bh, bh, p
             )
+        }
+
+        private fun drawLockIcon(canvas: Canvas, cx: Float, cy: Float, r: Float) {
+            p.color = Color.WHITE
+            p.alpha = 100
+            p.style = Paint.Style.STROKE
+            p.strokeWidth = r * 0.18f
+            p.shader = null
+            p.clearShadowLayer()
+            // Shackle (arc)
+            val shackleRect = RectF(cx - r * 0.55f, cy - r * 1.6f, cx + r * 0.55f, cy - r * 0.1f)
+            canvas.drawArc(shackleRect, 180f, 180f, false, p)
+            // Body (rounded rect)
+            p.style = Paint.Style.STROKE
+            val bodyRect = RectF(cx - r * 0.8f, cy - r * 0.2f, cx + r * 0.8f, cy + r * 1.1f)
+            canvas.drawRoundRect(bodyRect, r * 0.2f, r * 0.2f, p)
+            p.style = Paint.Style.FILL
         }
 
         private fun drawKeypad(canvas: Canvas, w: Float, h: Float, alpha: Float) {
