@@ -33,14 +33,6 @@ jobs:
             -storepass clock123 -keypass clock123 \
             -dname "CN=MagicClock,O=MC,L=Madrid,C=ES"
 
-      - name: Verify files
-        run: |
-          echo "=== gradle.properties ==="
-          cat android-project/gradle.properties
-          echo "=== app/build.gradle ==="
-          cat android-project/app/build.gradle
-          echo "=== OK ==="
-
       - name: Build APK
         working-directory: android-project
         run: |
