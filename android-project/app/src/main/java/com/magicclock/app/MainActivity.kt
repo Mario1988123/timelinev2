@@ -267,7 +267,7 @@ class MainActivity : Activity(), SensorEventListener {
         root.addView(mkSection("ACTIVAR RETORNO CON"))
         val triggerRow = mkMultiSelect(listOf("Tocar" to triggerTap, "Agitar" to triggerShake)) { states ->
             triggerTap = states[0]; triggerShake = states[1]
-            if (!triggerTap && !triggerShake) { triggerTap = true; updateMultiSelect(triggerRow, listOf(true, states[1])) }
+            if (!triggerTap && !triggerShake) triggerTap = true
             saveSettings()
         }
         root.addView(triggerRow)
@@ -389,16 +389,6 @@ class MainActivity : Activity(), SensorEventListener {
         applyStates()
         buttons.forEachIndexed { i, b -> b.setOnClickListener { states[i] = !states[i]; applyStates(); onChanged(states) } }
         return row
-    }
-
-    private fun updateMultiSelect(row: LinearLayout, newStates: List<Boolean>) {
-        for (i in 0 until row.childCount) {
-            val b = row.getChildAt(i) as? TextView ?: continue
-            if (i < newStates.size) {
-                if (newStates[i]) { b.setTextColor(Color.WHITE); b.setBackgroundColor(Color.argb(50, 255, 255, 255)) }
-                else { b.setTextColor(Color.argb(120, 255, 255, 255)); b.setBackgroundColor(Color.argb(10, 255, 255, 255)) }
-            }
-        }
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
