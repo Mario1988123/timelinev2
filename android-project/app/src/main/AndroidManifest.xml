@@ -6,7 +6,7 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
     <application
         android:icon="@mipmap/ic_launcher"
-        android:label="MagicClock"
+        android:label="Timeline"
         android:theme="@style/AppTheme">
         <activity
             android:name=".MainActivity"

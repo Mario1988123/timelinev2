@@ -36,13 +36,11 @@ class MainActivity : Activity(), SensorEventListener {
     enum class Phase { BOOT, DARK, LIVE, RETURNING }
     private var phase = Phase.BOOT
 
-    // ── Offset ──
     private var offsetMs = 0.0
     private var pendingSign: Char? = null
     private var returnStartTime = 0L
     private var returnStartOffset = 0.0
 
-    // ── Settings ──
     private var styleiOS = true
     private var triggerTap = true
     private var triggerShake = true
@@ -50,34 +48,26 @@ class MainActivity : Activity(), SensorEventListener {
     private var returnSpeed = 30
     private var shakeSens = 15f
 
-    // ── Shake ──
     private var sensorManager: SensorManager? = null
     private var lastAx = 0f; private var lastAy = 0f; private var lastAz = 0f
     private var shakeDebounce = 0L
 
-    // ── Keypad fade ──
     private var bootTime = 0L
     private val KEYPAD_SHOW_MS = 2000L
     private val KEYPAD_FADE_MS = 600L
 
-    // ── Two-finger ──
     private var twoFingerStartY = 0f
     private var twoFingerActive = false
 
-    // ── Custom wallpaper ──
     private var customWallpaper: Bitmap? = null
     private val PICK_IMAGE = 42
 
-    // ── Misc ──
     private val handler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var prefs: SharedPreferences
     private lateinit var clockView: ClockView
-    private var currentMenuDialog: Dialog? = null
 
-    // ══════════════════════════════════════════
-    //  LIFECYCLE
-    // ══════════════════════════════════════════
+    // ══════════════ LIFECYCLE ══════════════
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,28 +76,18 @@ class MainActivity : Activity(), SensorEventListener {
         if (Build.VERSION.SDK_INT >= 28) {
             window.attributes.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
-
         prefs = getSharedPreferences("mc", Context.MODE_PRIVATE)
-        loadSettings()
-        loadCustomWallpaper()
-
-        phase = Phase.BOOT
-        bootTime = System.currentTimeMillis()
-
-        clockView = ClockView(this)
-        setContentView(clockView)
-        hideSystemUI()
-
+        loadSettings(); loadCustomWallpaper()
+        phase = Phase.BOOT; bootTime = System.currentTimeMillis()
+        clockView = ClockView(this); setContentView(clockView); hideSystemUI()
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as? SensorManager
         sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
             sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
         }
-
         @Suppress("DEPRECATION")
         wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "mc:wake")
         wakeLock?.acquire(4 * 60 * 60 * 1000L)
-
         handler.postDelayed({ if (phase == Phase.BOOT) phase = Phase.DARK }, KEYPAD_SHOW_MS + KEYPAD_FADE_MS + 200)
         startTick()
     }
@@ -119,32 +99,24 @@ class MainActivity : Activity(), SensorEventListener {
             View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
             View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
     }
-
     override fun onWindowFocusChanged(f: Boolean) { super.onWindowFocusChanged(f); if (f) hideSystemUI() }
     override fun onResume() { super.onResume(); hideSystemUI() }
     override fun onDestroy() {
-        super.onDestroy()
-        sensorManager?.unregisterListener(this)
+        super.onDestroy(); sensorManager?.unregisterListener(this)
         wakeLock?.let { if (it.isHeld) it.release() }
     }
 
-    // ══════════════════════════════════════════
-    //  TIME — Europe/Madrid
-    // ══════════════════════════════════════════
+    // ══════════════ TIME ══════════════
 
     private fun madridCal(): Calendar = Calendar.getInstance(TimeZone.getTimeZone("Europe/Madrid"))
-
     private fun madridTimeMs(): Long {
         val c = madridCal()
-        return c.get(Calendar.HOUR_OF_DAY) * 3600000L + c.get(Calendar.MINUTE) * 60000L +
-               c.get(Calendar.SECOND) * 1000L + c.get(Calendar.MILLISECOND)
+        return c.get(Calendar.HOUR_OF_DAY)*3600000L + c.get(Calendar.MINUTE)*60000L + c.get(Calendar.SECOND)*1000L + c.get(Calendar.MILLISECOND)
     }
-
-    private fun msToHM(ms: Long): Pair<Int, Int> {
-        val d = 86400000L; val w = ((ms % d) + d) % d; val s = (w / 1000).toInt()
-        return Pair(s / 3600, (s % 3600) / 60)
+    private fun msToHM(ms: Long): Pair<Int,Int> {
+        val d = 86400000L; val w = ((ms%d)+d)%d; val s = (w/1000).toInt()
+        return Pair(s/3600, (s%3600)/60)
     }
-
     private fun madridDateStr(): String {
         val c = madridCal()
         val days = arrayOf("domingo","lunes","martes","miércoles","jueves","viernes","sábado")
@@ -152,9 +124,7 @@ class MainActivity : Activity(), SensorEventListener {
         return "${days[c.get(Calendar.DAY_OF_WEEK)-1].replaceFirstChar{it.uppercase()}}, ${c.get(Calendar.DAY_OF_MONTH)} de ${months[c.get(Calendar.MONTH)]}"
     }
 
-    // ══════════════════════════════════════════
-    //  TICK
-    // ══════════════════════════════════════════
+    // ══════════════ TICK ══════════════
 
     private fun startTick() {
         handler.post(object : Runnable {
@@ -165,17 +135,14 @@ class MainActivity : Activity(), SensorEventListener {
             }
         })
     }
-
     private fun updateReturn() {
         val elapsed = System.currentTimeMillis() - returnStartTime
         val dur = returnSpeed * 1000L
         if (elapsed >= dur) { offsetMs = 0.0; phase = Phase.LIVE }
-        else { val t = elapsed.toDouble() / dur; offsetMs = returnStartOffset * (1.0 - (1.0 - (1.0 - t).pow(3.0))) }
+        else { val t = elapsed.toDouble()/dur; offsetMs = returnStartOffset * (1.0 - (1.0-(1.0-t).pow(3.0))) }
     }
 
-    // ══════════════════════════════════════════
-    //  KEY HANDLING
-    // ══════════════════════════════════════════
+    // ══════════════ KEYS ══════════════
 
     private fun handleKey(key: String) {
         if (phase != Phase.BOOT && phase != Phase.DARK) return
@@ -187,99 +154,65 @@ class MainActivity : Activity(), SensorEventListener {
             pendingSign = null; goLive()
         }
     }
-
     private fun goLive() { phase = Phase.LIVE }
-
     private fun triggerReturn() {
         if (phase != Phase.LIVE) return
         if (triggerDelay > 0) handler.postDelayed({ startReturn() }, triggerDelay * 1000L)
         else startReturn()
     }
-
     private fun startReturn() {
         if (abs(offsetMs) < 500) { offsetMs = 0.0; return }
         phase = Phase.RETURNING; returnStartTime = System.currentTimeMillis(); returnStartOffset = offsetMs
     }
 
-    // ══════════════════════════════════════════
-    //  SHAKE
-    // ══════════════════════════════════════════
+    // ══════════════ SHAKE ══════════════
 
     override fun onSensorChanged(event: SensorEvent?) {
         val e = event ?: return
         if (e.sensor.type != Sensor.TYPE_ACCELEROMETER) return
-        val mag = abs(e.values[0] - lastAx) + abs(e.values[1] - lastAy) + abs(e.values[2] - lastAz)
+        val mag = abs(e.values[0]-lastAx) + abs(e.values[1]-lastAy) + abs(e.values[2]-lastAz)
         lastAx = e.values[0]; lastAy = e.values[1]; lastAz = e.values[2]
         val now = System.currentTimeMillis()
         if (mag > shakeSens && now - shakeDebounce > 800) {
-            shakeDebounce = now
-            if (triggerShake && phase == Phase.LIVE) triggerReturn()
+            shakeDebounce = now; if (triggerShake && phase == Phase.LIVE) triggerReturn()
         }
     }
     override fun onAccuracyChanged(s: Sensor?, a: Int) {}
 
-    // ══════════════════════════════════════════
-    //  CUSTOM WALLPAPER
-    // ══════════════════════════════════════════
+    // ══════════════ WALLPAPER ══════════════
 
     private fun pickWallpaper() {
-        val intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
-        intent.type = "image/*"
-        try { startActivityForResult(intent, PICK_IMAGE) } catch (_: Exception) {}
+        try { startActivityForResult(Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI).apply { type = "image/*" }, PICK_IMAGE) } catch (_: Exception) {}
     }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == PICK_IMAGE && resultCode == RESULT_OK && data?.data != null) {
-            loadBitmapFromUri(data.data!!)
-        }
+    override fun onActivityResult(req: Int, res: Int, data: Intent?) {
+        super.onActivityResult(req, res, data)
+        if (req == PICK_IMAGE && res == RESULT_OK && data?.data != null) loadBitmapFromUri(data.data!!)
     }
-
     private fun loadBitmapFromUri(uri: Uri) {
         try {
-            val input = contentResolver.openInputStream(uri) ?: return
-            val original = BitmapFactory.decodeStream(input)
-            input.close()
-            // Resize to save memory
-            val maxW = 1080
-            val scale = if (original.width > maxW) maxW.toFloat() / original.width else 1f
-            val w = (original.width * scale).toInt()
-            val h = (original.height * scale).toInt()
-            customWallpaper = Bitmap.createScaledBitmap(original, w, h, true)
-            if (original != customWallpaper) original.recycle()
+            val inp = contentResolver.openInputStream(uri) ?: return
+            val orig = BitmapFactory.decodeStream(inp); inp.close()
+            val s = if (orig.width > 1080) 1080f / orig.width else 1f
+            customWallpaper = Bitmap.createScaledBitmap(orig, (orig.width*s).toInt(), (orig.height*s).toInt(), true)
+            if (orig != customWallpaper) orig.recycle()
             saveCustomWallpaper()
-            // Reopen menu to show updated state
-            currentMenuDialog?.dismiss()
-            openSecretMenu()
         } catch (_: Exception) {}
     }
-
     private fun saveCustomWallpaper() {
         val bmp = customWallpaper ?: run { prefs.edit().remove("wallpaper").apply(); return }
-        try {
-            val baos = ByteArrayOutputStream()
-            bmp.compress(Bitmap.CompressFormat.JPEG, 75, baos)
-            prefs.edit().putString("wallpaper", Base64.encodeToString(baos.toByteArray(), Base64.DEFAULT)).apply()
+        try { val b = ByteArrayOutputStream(); bmp.compress(Bitmap.CompressFormat.JPEG, 75, b)
+            prefs.edit().putString("wallpaper", Base64.encodeToString(b.toByteArray(), Base64.DEFAULT)).apply()
         } catch (_: Exception) {}
     }
-
     private fun loadCustomWallpaper() {
         val b64 = prefs.getString("wallpaper", null) ?: return
-        try {
-            val bytes = Base64.decode(b64, Base64.DEFAULT)
-            customWallpaper = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-        } catch (_: Exception) {}
+        try { val bytes = Base64.decode(b64, Base64.DEFAULT); customWallpaper = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) } catch (_: Exception) {}
     }
-
     private fun removeCustomWallpaper() {
-        customWallpaper?.recycle()
-        customWallpaper = null
-        prefs.edit().remove("wallpaper").apply()
+        customWallpaper?.recycle(); customWallpaper = null; prefs.edit().remove("wallpaper").apply()
     }
 
-    // ══════════════════════════════════════════
-    //  SETTINGS
-    // ══════════════════════════════════════════
+    // ══════════════ SETTINGS ══════════════
 
     private fun loadSettings() {
         styleiOS = prefs.getBoolean("ios", true)
@@ -289,161 +222,212 @@ class MainActivity : Activity(), SensorEventListener {
         returnSpeed = prefs.getInt("returnSpeed", 30)
         shakeSens = prefs.getFloat("shakeSens", 15f)
     }
-
     private fun saveSettings() {
         prefs.edit().putBoolean("ios", styleiOS).putBoolean("triggerTap", triggerTap)
             .putBoolean("triggerShake", triggerShake).putInt("triggerDelay", triggerDelay)
             .putInt("returnSpeed", returnSpeed).putFloat("shakeSens", shakeSens).apply()
     }
 
-    // ══════════════════════════════════════════
-    //  SECRET MENU — rebuilt each time for live updates
-    // ══════════════════════════════════════════
+    // ══════════════════════════════════════════════════
+    //  SECRET MENU — no flicker, updates buttons in-place
+    // ══════════════════════════════════════════════════
 
     private fun openSecretMenu() {
-        currentMenuDialog?.dismiss()
         val dlg = Dialog(this, android.R.style.Theme_DeviceDefault_NoActionBar)
-        currentMenuDialog = dlg
         dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
         dlg.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dlg.window?.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
         dlg.window?.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-        dlg.window?.setDimAmount(0.88f)
+        dlg.window?.setDimAmount(0.90f)
 
-        val scroll = ScrollView(this).apply { setPadding(dp(24), dp(50), dp(24), dp(40)) }
+        val scroll = ScrollView(this).apply { setPadding(dp(24), dp(48), dp(24), dp(36)); isVerticalScrollBarEnabled = false }
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
 
         // Title
-        root.addView(mkText("⚙  Configuración", 20f, Color.WHITE).apply {
-            gravity = Gravity.CENTER; setPadding(0, 0, 0, dp(20))
+        root.addView(TextView(this@MainActivity).apply {
+            text = "⚙  Configuración"; textSize = 20f; setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER; setPadding(0, 0, 0, dp(6))
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         })
+        // by elitemagic
+        root.addView(TextView(this@MainActivity).apply {
+            text = "by elitemagic"; textSize = 11f; setTextColor(Color.argb(80, 255, 255, 255))
+            gravity = Gravity.CENTER; setPadding(0, 0, 0, dp(20))
+            typeface = Typeface.create("sans-serif-light", Typeface.ITALIC)
+        })
 
-        // ── Style ──
+        // ── Style (single select) ──
         root.addView(mkSection("ESTILO"))
-        root.addView(mkToggle(listOf("iOS" to styleiOS, "Android" to !styleiOS)) { i ->
-            styleiOS = i == 0; saveSettings(); rebuildMenu()
-        })
+        val styleRow = mkSingleSelect(listOf("iOS", "Android"), if (styleiOS) 0 else 1) { i ->
+            styleiOS = i == 0; saveSettings()
+        }
+        root.addView(styleRow)
 
-        // ── Trigger mode ──
+        // ── Trigger (multi select) ──
         root.addView(mkSection("ACTIVAR RETORNO CON"))
-        root.addView(mkToggle(listOf("Tocar" to triggerTap, "Agitar" to triggerShake)) { i ->
-            if (i == 0) triggerTap = !triggerTap
-            if (i == 1) triggerShake = !triggerShake
-            if (!triggerTap && !triggerShake) triggerTap = true
-            saveSettings(); rebuildMenu()
-        })
+        val triggerRow = mkMultiSelect(listOf("Tocar" to triggerTap, "Agitar" to triggerShake)) { states ->
+            triggerTap = states[0]; triggerShake = states[1]
+            if (!triggerTap && !triggerShake) { triggerTap = true; updateMultiSelect(triggerRow, listOf(true, states[1])) }
+            saveSettings()
+        }
+        root.addView(triggerRow)
 
-        // ── Delay ──
+        // ── Delay (single select) ──
         root.addView(mkSection("DELAY ANTES DEL RETORNO"))
-        root.addView(mkToggle(listOf("0s" to (triggerDelay==0), "3s" to (triggerDelay==3), "5s" to (triggerDelay==5), "10s" to (triggerDelay==10))) { i ->
-            triggerDelay = listOf(0,3,5,10)[i]; saveSettings(); rebuildMenu()
+        val delayOpts = listOf("0s", "3s", "5s", "10s")
+        val delayVals = listOf(0, 3, 5, 10)
+        val delayIdx = delayVals.indexOf(triggerDelay).coerceAtLeast(0)
+        root.addView(mkSingleSelect(delayOpts, delayIdx) { i ->
+            triggerDelay = delayVals[i]; saveSettings()
         })
 
         // ── Return speed ──
-        root.addView(mkSection("VELOCIDAD RETORNO: ${returnSpeed}s"))
+        val speedLabel = mkSection("VELOCIDAD RETORNO: ${returnSpeed}s")
+        root.addView(speedLabel)
         root.addView(SeekBar(this).apply {
             max = 23; progress = (returnSpeed - 5) / 5
-            setPadding(dp(4), dp(8), dp(4), dp(12))
+            setPadding(dp(4), dp(8), dp(4), dp(14))
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, p: Int, u: Boolean) { returnSpeed = 5 + p * 5; saveSettings() }
+                override fun onProgressChanged(sb: SeekBar?, p: Int, u: Boolean) {
+                    returnSpeed = 5 + p * 5; speedLabel.text = "VELOCIDAD RETORNO: ${returnSpeed}s"; saveSettings()
+                }
                 override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) { rebuildMenu() }
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
             })
         })
 
-        // ── Shake sens ──
-        root.addView(mkSection("SENSIBILIDAD SHAKE: ${shakeSens.toInt()}"))
+        // ── Shake sensitivity ──
+        val shakeLabel = mkSection("SENSIBILIDAD SHAKE: ${shakeSens.toInt()}")
+        root.addView(shakeLabel)
         root.addView(SeekBar(this).apply {
             max = 35; progress = shakeSens.toInt() - 5
-            setPadding(dp(4), dp(8), dp(4), dp(12))
+            setPadding(dp(4), dp(8), dp(4), dp(14))
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, p: Int, u: Boolean) { shakeSens = (5 + p).toFloat(); saveSettings() }
+                override fun onProgressChanged(sb: SeekBar?, p: Int, u: Boolean) {
+                    shakeSens = (5 + p).toFloat(); shakeLabel.text = "SENSIBILIDAD SHAKE: ${shakeSens.toInt()}"; saveSettings()
+                }
                 override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) { rebuildMenu() }
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
             })
         })
 
         // ── Wallpaper ──
         root.addView(mkSection("FONDO DE PANTALLA"))
+        val wpStatus = TextView(this).apply {
+            textSize = 12f; setPadding(0, dp(2), 0, dp(6))
+            if (customWallpaper != null) { text = "✓ Fondo personalizado activo"; setTextColor(Color.argb(180, 130, 255, 130)) }
+            else { text = "Degradado por defecto"; setTextColor(Color.argb(100, 255, 255, 255)) }
+        }
+        root.addView(wpStatus)
+        root.addView(mkBtn(if (customWallpaper != null) "Cambiar foto" else "Subir foto de galería") { pickWallpaper(); dlg.dismiss() })
         if (customWallpaper != null) {
-            root.addView(mkText("✓ Fondo personalizado activo", 13f, Color.argb(180, 150, 255, 150)).apply {
-                setPadding(0, dp(4), 0, dp(8))
+            root.addView(mkBtn("Quitar fondo personalizado") {
+                removeCustomWallpaper(); wpStatus.text = "Degradado por defecto"; wpStatus.setTextColor(Color.argb(100, 255, 255, 255))
             })
-            root.addView(mkBtn("Cambiar foto") { pickWallpaper() })
-            root.addView(mkBtn("Quitar fondo personalizado") { removeCustomWallpaper(); rebuildMenu() })
-        } else {
-            root.addView(mkBtn("Subir foto de galería") { pickWallpaper() })
         }
 
         // ── Actions ──
         root.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(20)) })
-        root.addView(mkBtn("Calibrar hora (reset offset)") { offsetMs = 0.0; phase = Phase.DARK })
         root.addView(mkBtn("Reiniciar (pantalla negra)") {
             offsetMs = 0.0; pendingSign = null; phase = Phase.BOOT; bootTime = System.currentTimeMillis()
             handler.postDelayed({ if (phase == Phase.BOOT) phase = Phase.DARK }, KEYPAD_SHOW_MS + KEYPAD_FADE_MS + 200)
             dlg.dismiss()
         })
-        root.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(12)) })
+        root.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(14)) })
         root.addView(mkBtn("Cerrar") { dlg.dismiss() })
 
-        scroll.addView(root)
-        dlg.setContentView(scroll)
-        dlg.show()
+        scroll.addView(root); dlg.setContentView(scroll); dlg.show()
     }
 
-    private fun rebuildMenu() { openSecretMenu() }
-
-    // ── Menu helpers ──
-    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
-
-    private fun mkText(text: String, size: Float, color: Int): TextView {
-        return TextView(this).apply { this.text = text; textSize = size; setTextColor(color) }
+    // ── Single select: only one active at a time, updates visually in-place ──
+    private fun mkSingleSelect(labels: List<String>, activeIdx: Int, onSelect: (Int) -> Unit): LinearLayout {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, dp(2)) }
+        val buttons = mutableListOf<TextView>()
+        labels.forEachIndexed { i, label ->
+            val btn = TextView(this).apply {
+                text = label; textSize = 13f; gravity = Gravity.CENTER
+                setPadding(dp(6), dp(10), dp(6), dp(10))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    if (i > 0) marginStart = dp(4)
+                }
+            }
+            buttons.add(btn)
+            row.addView(btn)
+        }
+        fun applyState(sel: Int) {
+            buttons.forEachIndexed { i, b ->
+                if (i == sel) { b.setTextColor(Color.WHITE); b.setBackgroundColor(Color.argb(50, 255, 255, 255)) }
+                else { b.setTextColor(Color.argb(120, 255, 255, 255)); b.setBackgroundColor(Color.argb(10, 255, 255, 255)) }
+            }
+        }
+        applyState(activeIdx)
+        buttons.forEachIndexed { i, b -> b.setOnClickListener { applyState(i); onSelect(i) } }
+        return row
     }
 
-    private fun mkSection(text: String): TextView {
-        return TextView(this).apply {
-            this.text = text; textSize = 11f; setTextColor(Color.argb(110, 255, 255, 255))
-            letterSpacing = 0.1f; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            setPadding(0, dp(16), 0, dp(6))
+    // ── Multi select: toggle each independently, updates visually in-place ──
+    private fun mkMultiSelect(items: List<Pair<String, Boolean>>, onChanged: (List<Boolean>) -> Unit): LinearLayout {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, dp(2)) }
+        val states = items.map { it.second }.toMutableList()
+        val buttons = mutableListOf<TextView>()
+        items.forEachIndexed { i, (label, _) ->
+            val btn = TextView(this).apply {
+                text = label; textSize = 13f; gravity = Gravity.CENTER
+                setPadding(dp(6), dp(10), dp(6), dp(10))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    if (i > 0) marginStart = dp(4)
+                }
+            }
+            buttons.add(btn); row.addView(btn)
+        }
+        fun applyStates() {
+            buttons.forEachIndexed { i, b ->
+                if (states[i]) { b.setTextColor(Color.WHITE); b.setBackgroundColor(Color.argb(50, 255, 255, 255)) }
+                else { b.setTextColor(Color.argb(120, 255, 255, 255)); b.setBackgroundColor(Color.argb(10, 255, 255, 255)) }
+            }
+        }
+        applyStates()
+        buttons.forEachIndexed { i, b -> b.setOnClickListener { states[i] = !states[i]; applyStates(); onChanged(states) } }
+        return row
+    }
+
+    private fun updateMultiSelect(row: LinearLayout, newStates: List<Boolean>) {
+        for (i in 0 until row.childCount) {
+            val b = row.getChildAt(i) as? TextView ?: continue
+            if (i < newStates.size) {
+                if (newStates[i]) { b.setTextColor(Color.WHITE); b.setBackgroundColor(Color.argb(50, 255, 255, 255)) }
+                else { b.setTextColor(Color.argb(120, 255, 255, 255)); b.setBackgroundColor(Color.argb(10, 255, 255, 255)) }
+            }
         }
     }
 
-    private fun mkToggle(items: List<Pair<String, Boolean>>, onClick: (Int) -> Unit): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; setPadding(0, 0, 0, dp(2))
-            items.forEachIndexed { i, (label, on) ->
-                addView(TextView(this@MainActivity).apply {
-                    text = label; textSize = 13f; gravity = Gravity.CENTER
-                    setPadding(dp(6), dp(10), dp(6), dp(10))
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                        if (i > 0) marginStart = dp(4)
-                    }
-                    setTextColor(if (on) Color.WHITE else Color.argb(130, 255, 255, 255))
-                    setBackgroundColor(if (on) Color.argb(45, 255, 255, 255) else Color.argb(10, 255, 255, 255))
-                    setOnClickListener { onClick(i) }
-                })
-            }
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    private fun mkSection(text: String): TextView {
+        return TextView(this).apply {
+            this.text = text; textSize = 11f; setTextColor(Color.argb(100, 255, 255, 255))
+            letterSpacing = 0.08f; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            setPadding(0, dp(16), 0, dp(6))
         }
     }
 
     private fun mkBtn(text: String, action: () -> Unit): TextView {
         return TextView(this).apply {
             this.text = text; textSize = 14f; setTextColor(Color.argb(200, 255, 255, 255))
-            gravity = Gravity.CENTER; setPadding(dp(14), dp(13), dp(14), dp(13))
-            setBackgroundColor(Color.argb(20, 255, 255, 255))
+            gravity = Gravity.CENTER; setPadding(dp(14), dp(12), dp(14), dp(12))
+            setBackgroundColor(Color.argb(18, 255, 255, 255))
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
             setOnClickListener { action() }
         }
     }
 
     // ══════════════════════════════════════════
-    //  CLOCK VIEW — all native Canvas drawing
+    //  CLOCK VIEW
     // ══════════════════════════════════════════
 
     inner class ClockView(ctx: Context) : View(ctx) {
         private val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val lockPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val lockP = Paint(Paint.ANTI_ALIAS_FLAG)
         private val keys = arrayOf(arrayOf("1","2","3"), arrayOf("4","5","6"), arrayOf("7","8","9"), arrayOf("+","0","-"))
 
         override fun onDraw(canvas: Canvas) {
@@ -456,44 +440,38 @@ class MainActivity : Activity(), SensorEventListener {
         }
 
         private fun calcBootAlpha(): Float {
-            val elapsed = System.currentTimeMillis() - bootTime
+            val e = System.currentTimeMillis() - bootTime
             return when {
-                elapsed < KEYPAD_SHOW_MS -> 0.14f
-                elapsed < KEYPAD_SHOW_MS + KEYPAD_FADE_MS -> 0.14f * (1f - (elapsed - KEYPAD_SHOW_MS).toFloat() / KEYPAD_FADE_MS)
+                e < KEYPAD_SHOW_MS -> 0.14f
+                e < KEYPAD_SHOW_MS + KEYPAD_FADE_MS -> 0.14f * (1f - (e - KEYPAD_SHOW_MS).toFloat() / KEYPAD_FADE_MS)
                 else -> 0f
             }
         }
 
         private fun drawLive(canvas: Canvas, w: Float, h: Float) {
-            // Background
             val wp = customWallpaper
             if (wp != null && !wp.isRecycled) {
-                val src = Rect(0, 0, wp.width, wp.height)
-                val dst = Rect(0, 0, w.toInt(), h.toInt())
-                canvas.drawBitmap(wp, src, dst, null)
-                // Slight dark overlay for readability
-                p.color = Color.argb(60, 0, 0, 0); p.style = Paint.Style.FILL; p.shader = null
+                canvas.drawBitmap(wp, Rect(0, 0, wp.width, wp.height), Rect(0, 0, w.toInt(), h.toInt()), null)
+                p.color = Color.argb(50, 0, 0, 0); p.style = Paint.Style.FILL; p.shader = null
                 canvas.drawRect(0f, 0f, w, h, p)
             } else {
-                val grad = LinearGradient(0f, 0f, w * 0.3f, h,
+                p.shader = LinearGradient(0f, 0f, w*0.3f, h,
                     intArrayOf(Color.rgb(10,10,46), Color.rgb(26,10,58), Color.rgb(10,26,46)),
                     floatArrayOf(0f, 0.4f, 1f), Shader.TileMode.CLAMP)
-                p.shader = grad; p.style = Paint.Style.FILL
-                canvas.drawRect(0f, 0f, w, h, p); p.shader = null
+                p.style = Paint.Style.FILL; canvas.drawRect(0f, 0f, w, h, p); p.shader = null
             }
 
-            // Lock icon — white outline only
-            drawLockIcon(canvas, w / 2f, h * 0.06f, w * 0.022f)
+            // Lock icon — iOS style
+            drawLockIcon(canvas, w / 2f, h * 0.065f, w * 0.028f)
 
             // Time
             val (hr, mn) = msToHM(madridTimeMs() + offsetMs.toLong())
-            val timeStr = String.format(Locale.US, "%02d:%02d", hr, mn)
             p.color = Color.WHITE; p.textAlign = Paint.Align.CENTER; p.shader = null; p.style = Paint.Style.FILL
             p.setShadowLayer(24f, 0f, 3f, Color.argb(70, 0, 0, 0))
             if (styleiOS) { p.typeface = Typeface.create("sans-serif", Typeface.BOLD); p.textSize = w * 0.22f }
             else { p.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL); p.textSize = w * 0.20f }
-            val timeY = if (styleiOS) h * 0.22f else h * 0.26f
-            canvas.drawText(timeStr, w / 2f, timeY, p)
+            val timeY = if (styleiOS) h * 0.23f else h * 0.27f
+            canvas.drawText(String.format(Locale.US, "%02d:%02d", hr, mn), w / 2f, timeY, p)
             p.clearShadowLayer()
 
             // Date
@@ -508,15 +486,27 @@ class MainActivity : Activity(), SensorEventListener {
             canvas.drawRoundRect(w/2f - bw/2f, h - h*0.025f, w/2f + bw/2f, h - h*0.025f + bh, bh, bh, p)
         }
 
+        // iOS-style lock icon: filled body + shackle arc
         private fun drawLockIcon(canvas: Canvas, cx: Float, cy: Float, r: Float) {
-            lockPaint.color = Color.WHITE; lockPaint.alpha = 120
-            lockPaint.style = Paint.Style.STROKE; lockPaint.strokeWidth = r * 0.22f
-            lockPaint.strokeCap = Paint.Cap.ROUND; lockPaint.shader = null
-            lockPaint.clearShadowLayer()
-            // Shackle
-            canvas.drawArc(RectF(cx - r * 0.6f, cy - r * 1.8f, cx + r * 0.6f, cy), 180f, 180f, false, lockPaint)
-            // Body
-            canvas.drawRoundRect(RectF(cx - r * 0.85f, cy, cx + r * 0.85f, cy + r * 1.3f), r * 0.15f, r * 0.15f, lockPaint)
+            lockP.color = Color.WHITE; lockP.alpha = 180; lockP.shader = null; lockP.clearShadowLayer()
+
+            // Shackle (thick arc on top)
+            lockP.style = Paint.Style.STROKE; lockP.strokeWidth = r * 0.32f; lockP.strokeCap = Paint.Cap.ROUND
+            val shackleW = r * 0.65f; val shackleH = r * 1.0f
+            canvas.drawArc(RectF(cx - shackleW, cy - shackleH * 1.6f, cx + shackleW, cy - shackleH * 0.1f), 180f, 180f, false, lockP)
+
+            // Body (filled rounded rect)
+            lockP.style = Paint.Style.FILL
+            val bodyW = r * 1.0f; val bodyH = r * 1.1f
+            val bodyTop = cy - r * 0.15f
+            canvas.drawRoundRect(RectF(cx - bodyW, bodyTop, cx + bodyW, bodyTop + bodyH), r * 0.18f, r * 0.18f, lockP)
+
+            // Keyhole (dark circle + line)
+            lockP.color = Color.argb(180, 30, 30, 60)
+            val holeY = bodyTop + bodyH * 0.38f
+            canvas.drawCircle(cx, holeY, r * 0.16f, lockP)
+            lockP.strokeWidth = r * 0.12f; lockP.style = Paint.Style.STROKE; lockP.strokeCap = Paint.Cap.ROUND
+            canvas.drawLine(cx, holeY + r * 0.12f, cx, holeY + r * 0.35f, lockP)
         }
 
         private fun drawKeypad(canvas: Canvas, w: Float, h: Float, alpha: Float) {
@@ -539,13 +529,11 @@ class MainActivity : Activity(), SensorEventListener {
             return if (row in 0..3 && col in 0..2) keys[row][col] else null
         }
 
-        // ── TOUCH ──
         private var downTime = 0L; private var downX = 0f; private var downY = 0f
 
         @Suppress("ClickableViewAccessibility")
         override fun onTouchEvent(event: MotionEvent): Boolean {
             val action = event.actionMasked
-            // Two-finger
             if (event.pointerCount == 2) {
                 when (action) {
                     MotionEvent.ACTION_POINTER_DOWN -> { twoFingerActive = true; twoFingerStartY = (event.getY(0) + event.getY(1)) / 2f }
@@ -554,8 +542,7 @@ class MainActivity : Activity(), SensorEventListener {
                         if (d > 100) { twoFingerActive = false; openSecretMenu() }
                         else if (d < -100) { twoFingerActive = false; finishAndRemoveTask() }
                     }
-                }
-                return true
+                }; return true
             }
             twoFingerActive = false
             when (action) {
@@ -571,8 +558,7 @@ class MainActivity : Activity(), SensorEventListener {
                         }
                     }
                 }
-            }
-            return true
+            }; return true
         }
     }
 }
