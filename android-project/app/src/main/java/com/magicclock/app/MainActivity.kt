@@ -465,7 +465,22 @@ class MainActivity : Activity(), SensorEventListener {
         private fun drawLive(canvas: Canvas, w: Float, h: Float) {
             val wp = customWallpaper
             if (wp != null && !wp.isRecycled) {
-                canvas.drawBitmap(wp, Rect(0, 0, wp.width, wp.height), Rect(0, 0, w.toInt(), h.toInt()), null)
+                // Center-crop: scale to fill, then crop overflow
+                val imgRatio = wp.width.toFloat() / wp.height.toFloat()
+                val screenRatio = w / h
+                val src: Rect
+                if (imgRatio > screenRatio) {
+                    // Image wider than screen — crop sides
+                    val cropW = (wp.height * screenRatio).toInt()
+                    val left = (wp.width - cropW) / 2
+                    src = Rect(left, 0, left + cropW, wp.height)
+                } else {
+                    // Image taller than screen — crop top/bottom
+                    val cropH = (wp.width / screenRatio).toInt()
+                    val top = (wp.height - cropH) / 2
+                    src = Rect(0, top, wp.width, top + cropH)
+                }
+                canvas.drawBitmap(wp, src, Rect(0, 0, w.toInt(), h.toInt()), null)
                 p.color = Color.argb(50, 0, 0, 0); p.style = Paint.Style.FILL; p.shader = null
                 canvas.drawRect(0f, 0f, w, h, p)
             } else {
